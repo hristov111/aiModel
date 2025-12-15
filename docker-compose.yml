@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: ai_companion_db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_companion
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # AI Companion Service
+  ai-companion:
+    build: .
+    container_name: ai_companion_service
+    ports:
+      - "8000:8000"
+    environment:
+      # Database
+      POSTGRES_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_companion
+      
+      # LM Studio (assumes running on host)
+      LM_STUDIO_BASE_URL: ${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      LM_STUDIO_MODEL_NAME: ${LM_STUDIO_MODEL_NAME:-local-model}
+      
+      # Memory configuration
+      SHORT_TERM_MEMORY_SIZE: 10
+      LONG_TERM_MEMORY_TOP_K: 5
+      
+      # System
+      LOG_LEVEL: INFO
+      CORS_ORIGINS: http://localhost:3000,http://localhost:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app  # Mount for development (optional)
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+

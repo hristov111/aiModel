@@ -1,0 +1,114 @@
+"""Dependency injection for FastAPI."""
+
+from typing import AsyncGenerator, Optional
+from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.core.auth import get_current_user_id, ensure_user_exists
+from app.repositories.vector_store import VectorStoreRepository
+from app.utils.embeddings import get_embedding_generator, EmbeddingGenerator
+from app.services.llm_client import get_llm_client, LLMClient
+from app.services.short_term_memory import get_conversation_buffer, ConversationBuffer
+from app.services.long_term_memory import LongTermMemoryService
+from app.services.prompt_builder import PromptBuilder
+from app.services.chat_service import ChatService
+from app.services.user_preference_service import UserPreferenceService
+from app.services.emotion_service import EmotionService
+from app.services.personality_service import PersonalityService
+from app.models.database import UserModel
+
+
+# Singletons
+def get_embedding_generator_dep() -> EmbeddingGenerator:
+    """Get embedding generator dependency."""
+    return get_embedding_generator()
+
+
+def get_llm_client_dep() -> LLMClient:
+    """Get LLM client dependency."""
+    return get_llm_client()
+
+
+def get_conversation_buffer_dep() -> ConversationBuffer:
+    """Get conversation buffer dependency."""
+    return get_conversation_buffer()
+
+
+def get_prompt_builder_dep() -> PromptBuilder:
+    """Get prompt builder dependency."""
+    return PromptBuilder()
+
+
+# Database-dependent services
+def get_vector_store(
+    db: AsyncSession = Depends(get_db)
+) -> VectorStoreRepository:
+    """Get vector store repository dependency."""
+    return VectorStoreRepository(db)
+
+
+def get_long_term_memory(
+    vector_store: VectorStoreRepository = Depends(get_vector_store),
+    embedding_generator: EmbeddingGenerator = Depends(get_embedding_generator_dep),
+    llm_client: LLMClient = Depends(get_llm_client_dep)
+) -> LongTermMemoryService:
+    """Get long-term memory service dependency."""
+    return LongTermMemoryService(
+        vector_store=vector_store,
+        embedding_generator=embedding_generator,
+        llm_client=None  # Don't use LLM for extraction by default (performance)
+    )
+
+
+def get_preference_service(
+    db: AsyncSession = Depends(get_db)
+) -> UserPreferenceService:
+    """Get user preference service dependency."""
+    return UserPreferenceService(db)
+
+
+def get_emotion_service(
+    db: AsyncSession = Depends(get_db)
+) -> EmotionService:
+    """Get emotion service dependency."""
+    return EmotionService(db)
+
+
+def get_personality_service(
+    db: AsyncSession = Depends(get_db)
+) -> PersonalityService:
+    """Get personality service dependency."""
+    return PersonalityService(db)
+
+
+def get_goal_service(
+    db: AsyncSession = Depends(get_db)
+):
+    """Get goal service dependency."""
+    from app.services.goal_service import GoalService
+    return GoalService(db)
+
+
+def get_chat_service(
+    conversation_buffer: ConversationBuffer = Depends(get_conversation_buffer_dep),
+    long_term_memory: LongTermMemoryService = Depends(get_long_term_memory),
+    prompt_builder: PromptBuilder = Depends(get_prompt_builder_dep),
+    llm_client: LLMClient = Depends(get_llm_client_dep),
+    preference_service: UserPreferenceService = Depends(get_preference_service),
+    emotion_service: EmotionService = Depends(get_emotion_service),
+    personality_service: PersonalityService = Depends(get_personality_service),
+    goal_service = Depends(get_goal_service)
+) -> ChatService:
+    """Get chat service dependency."""
+    return ChatService(
+        conversation_buffer=conversation_buffer,
+        long_term_memory=long_term_memory,
+        prompt_builder=prompt_builder,
+        llm_client=llm_client,
+        preference_service=preference_service,
+        emotion_service=emotion_service,
+        personality_service=personality_service,
+        goal_service=goal_service
+    )
+

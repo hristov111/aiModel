@@ -1,0 +1,76 @@
+# AI Companion Service Configuration
+# Copy this file to .env and configure for your environment
+
+# ============================================
+# Environment
+# ============================================
+# Set to 'production' to enable production validation
+ENVIRONMENT=development
+
+# ============================================
+# LM Studio Configuration
+# ============================================
+LM_STUDIO_BASE_URL=http://localhost:1234/v1
+LM_STUDIO_MODEL_NAME=local-model
+LM_STUDIO_TEMPERATURE=0.7
+LM_STUDIO_MAX_TOKENS=2000
+
+# ============================================
+# Database Configuration
+# ============================================
+POSTGRES_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/ai_companion
+POSTGRES_POOL_SIZE=10
+POSTGRES_MAX_OVERFLOW=20
+
+# ============================================
+# Embedding Configuration
+# ============================================
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+EMBEDDING_DIMENSION=384
+
+# ============================================
+# Memory Configuration
+# ============================================
+SHORT_TERM_MEMORY_SIZE=10
+LONG_TERM_MEMORY_TOP_K=5
+MEMORY_SIMILARITY_THRESHOLD=0.7
+MEMORY_EXTRACTION_MIN_TURNS=3
+
+# ============================================
+# System Configuration
+# ============================================
+SYSTEM_PERSONA=a helpful, knowledgeable AI assistant with memory of past conversations
+RATE_LIMIT_REQUESTS_PER_MINUTE=30
+
+# ============================================
+# Authentication (NEW in v2.0)
+# ============================================
+REQUIRE_AUTHENTICATION=true
+JWT_SECRET_KEY=change-this-to-a-long-random-string-in-production
+JWT_ALGORITHM=HS256
+JWT_EXPIRATION_HOURS=24
+
+# ============================================
+# CORS Configuration
+# ============================================
+# Comma-separated list of allowed origins
+CORS_ORIGINS=http://localhost:3000,http://localhost:8080
+
+# ============================================
+# Redis Configuration (Optional - for distributed deployments)
+# ============================================
+# Enable Redis for distributed short-term memory across multiple instances
+REDIS_URL=redis://localhost:6379/0
+REDIS_ENABLED=false
+
+# ============================================
+# Monitoring & Observability
+# ============================================
+# Prometheus metrics available at /metrics
+# Request IDs automatically added to all requests
+
+# ============================================
+# Logging
+# ============================================
+LOG_LEVEL=INFO
+
