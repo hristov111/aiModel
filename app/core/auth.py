@@ -2,6 +2,7 @@
 
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
+from uuid import UUID
 from fastapi import Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -274,6 +275,27 @@ async def ensure_user_exists(
     return user
 
 
+async def get_user_db_id(
+    session: AsyncSession,
+    external_user_id: str
+) -> Optional[UUID]:
+    """
+    Get database UUID for a user given their external user ID.
+    
+    Args:
+        session: Database session
+        external_user_id: External user ID
+        
+    Returns:
+        Database UUID or None if user not found
+    """
+    result = await session.execute(
+        select(UserModel.id).where(UserModel.external_user_id == external_user_id)
+    )
+    user_id = result.scalar_one_or_none()
+    return user_id
+
+
 async def verify_conversation_ownership(
     session: AsyncSession,
     conversation_id,
@@ -288,25 +310,38 @@ async def verify_conversation_ownership(
         user_id: External user ID
         
     Returns:
-        True if user owns conversation
+        True if user owns conversation or conversation doesn't exist in DB (in-memory only)
         
     Raises:
-        HTTPException: If conversation not found or unauthorized
+        HTTPException: If conversation exists but belongs to another user
     """
     from app.models.database import ConversationModel
     
+    # First check if conversation exists in database
+    result = await session.execute(
+        select(ConversationModel)
+        .where(ConversationModel.id == conversation_id)
+    )
+    conversation = result.scalar_one_or_none()
+    
+    # If conversation doesn't exist in DB, it's in-memory only - allow it
+    if conversation is None:
+        logger.info(f"Conversation {conversation_id} not in database (in-memory only), allowing access")
+        return True
+    
+    # Conversation exists, verify ownership
     result = await session.execute(
         select(ConversationModel)
         .join(UserModel)
         .where(ConversationModel.id == conversation_id)
         .where(UserModel.external_user_id == user_id)
     )
-    conversation = result.scalar_one_or_none()
+    owned_conversation = result.scalar_one_or_none()
     
-    if conversation is None:
+    if owned_conversation is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found or you don't have access"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this conversation"
         )
     
     return True

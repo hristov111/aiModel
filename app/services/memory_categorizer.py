@@ -1,319 +1,279 @@
-"""Memory categorization and entity extraction."""
+"""Intelligent memory categorization with AI chaining."""
 
 import re
+import json
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Optional, Dict, Any
+
+from app.models.memory import MemoryType
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryCategorizer:
     """
-    Categorizes memories and extracts entities (people, places, topics).
+    Categorizes memories into types (FACT, PREFERENCE, EVENT, CONTEXT).
     
-    Categories:
-    - personal_fact: Facts about the user (age, job, location, etc.)
-    - preference: User preferences (likes, dislikes, favorites)
-    - goal: User goals and aspirations
-    - event: Past events and experiences
-    - relationship: Information about people in user's life
-    - challenge: Struggles, problems, obstacles
-    - achievement: Accomplishments, wins, successes
-    - knowledge: General knowledge user wants to remember
-    - instruction: How user wants AI to behave
+    Supports multiple categorization methods:
+    - Pattern-based (regex matching)
+    - LLM-based (AI chaining for semantic understanding)
+    - Hybrid (LLM with pattern fallback)
+    
+    Examples:
+    - "I like chocolate" → PREFERENCE (obvious)
+    - "Chocolate reminds me of my grandmother" → EVENT (AI understands emotional memory)
+    - "I work at Google" → FACT (straightforward)
+    - "We were talking about AI safety" → CONTEXT (conversation topic)
     """
     
-    # Category detection patterns
-    CATEGORY_PATTERNS = {
-        'personal_fact': [
-            r'(i am|i\'m|my name is) ',
-            r'i (work|live|study) (at|in|as)',
-            r'i have a? (job|career|degree|certification)',
-            r'(my age|i\'m \d+ years old)',
-            r'(my birthday|born (in|on))',
-            r'(my (hometown|city|country))',
-            r'(single|married|divorced|in a relationship)'
-        ],
-        'preference': [
-            r'i (like|love|enjoy|prefer)',
-            r'i (hate|dislike|can\'t stand)',
-            r'(my favorite|i\'m a fan of)',
-            r'i (always|never|usually) (eat|drink|watch|read|listen)',
-            r'i prefer .* (over|to|instead of)',
-            r'(allergic to|vegetarian|vegan)'
-        ],
-        'goal': [
-            r'i want to',
-            r'i\'m (planning|hoping|trying) to',
-            r'(my goal|my dream) is',
-            r'i\'m working (on|toward)',
-            r'i aspire to',
-            r'i\'d like to (learn|achieve|accomplish)',
-            r'by (next year|2024|2025)',
-            r'(saving up for|planning to buy)'
-        ],
-        'event': [
-            r'(yesterday|last (week|month|year))',
-            r'(i went to|i visited|i traveled)',
-            r'(happened|occurred) (yesterday|recently)',
-            r'(remember when|back when)',
-            r'(i met|i saw|i did)',
-            r'(celebration|party|wedding|funeral)',
-            r'(graduated|got married|had a baby)'
-        ],
-        'relationship': [
-            r'(my (wife|husband|partner|boyfriend|girlfriend))',
-            r'(my (mom|dad|mother|father|parent))',
-            r'(my (son|daughter|child|kid))',
-            r'(my (brother|sister|sibling))',
-            r'(my (friend|colleague|boss|coworker))',
-            r'(named|called) [A-Z][a-z]+',
-            r'[A-Z][a-z]+ (is|works|lives|said|thinks)',
-            r'(family|relatives|in-laws)'
-        ],
-        'challenge': [
-            r'(struggling|having trouble|difficulty) with',
-            r'(problem|issue|challenge) (with|is)',
-            r'(can\'t (seem to|figure out))',
-            r'(frustrated|stuck|overwhelmed) (with|by)',
-            r'(worry|worried|anxious) about',
-            r'(health (issue|problem)|medical)',
-            r'(financial (trouble|stress))',
-            r'(relationship (problem|issue))'
-        ],
-        'achievement': [
-            r'(got|received|earned) (a|the|my) (promotion|raise|award)',
-            r'(finished|completed|accomplished)',
-            r'(proud|excited) (of|about)',
-            r'(won|achieved|succeeded)',
-            r'(milestone|breakthrough)',
-            r'(certificate|degree|diploma)',
-            r'(personal record|new high)'
-        ],
-        'knowledge': [
-            r'(did you know|fun fact)',
-            r'(learned|discovered|found out) that',
-            r'(research shows|studies indicate)',
-            r'(according to|based on)',
-            r'(defined as|means that)',
-            r'(formula|equation|method) (for|is)'
-        ],
-        'instruction': [
-            r'(remember|don\'t forget) to',
-            r'(always|never) (call|refer|mention) me',
-            r'when (i say|i mention)',
-            r'(respond|reply|answer) with',
-            r'(your role is|you should)',
-            r'(make sure to|be sure to)'
-        ]
-    }
-    
-    def categorize(
-        self,
-        memory_content: str,
-        memory_type: Optional[str] = None
-    ) -> str:
+    def __init__(self, llm_client=None, method: str = None):
         """
-        Categorize a memory based on its content.
+        Initialize memory categorizer.
         
         Args:
-            memory_content: The memory text
-            memory_type: Existing type hint (fact, preference, etc.)
+            llm_client: Optional LLM client for AI-based categorization
+            method: Categorization method ("llm", "pattern", "hybrid"). Defaults to config.
+        """
+        self.llm_client = llm_client
+        self.method = method or settings.memory_categorization_method.lower()
+        logger.info(f"MemoryCategorizer initialized with method: {self.method}")
+    
+    async def categorize(
+        self,
+        content: str,
+        context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Categorize a memory using the configured method.
+        
+        Args:
+            content: Memory content to categorize
+            context: Optional conversation context
             
         Returns:
-            Category string
+            Dict with 'type' (MemoryType), 'confidence' (float), and 'reasoning' (str)
         """
-        content_lower = memory_content.lower()
-        
-        # Score each category
-        category_scores = {}
-        for category, patterns in self.CATEGORY_PATTERNS.items():
-            score = 0
-            for pattern in patterns:
-                if re.search(pattern, content_lower):
-                    score += 1
-            if score > 0:
-                category_scores[category] = score
-        
-        # Use existing memory_type as hint
-        if memory_type:
-            type_category_map = {
-                'preference': 'preference',
-                'goal': 'goal',
-                'fact': 'personal_fact',
-                'event': 'event',
-                'instruction': 'instruction'
+        if not content or len(content.strip()) < 3:
+            return {
+                'type': MemoryType.CONTEXT,
+                'confidence': 0.5,
+                'reasoning': 'Too short to categorize meaningfully'
             }
-            if memory_type in type_category_map:
-                category = type_category_map[memory_type]
-                if category in category_scores:
-                    category_scores[category] += 2  # Boost existing type
-                else:
-                    category_scores[category] = 2
         
-        # Return highest scoring category or default
-        if category_scores:
-            best_category = max(category_scores.items(), key=lambda x: x[1])[0]
-            return best_category
-        
-        return 'knowledge'  # Default category
+        # Choose categorization method
+        if self.method == "llm":
+            return await self._categorize_with_llm(content, context)
+        elif self.method == "pattern":
+            return self._categorize_with_patterns(content)
+        else:  # hybrid (default)
+            # Try LLM first
+            llm_result = await self._categorize_with_llm(content, context)
+            if llm_result and llm_result.get('confidence', 0) >= 0.6:
+                logger.debug(f"Using LLM categorization (confidence: {llm_result['confidence']:.2f})")
+                return llm_result
+            # Fallback to patterns
+            logger.debug("LLM categorization low confidence, falling back to patterns")
+            return self._categorize_with_patterns(content)
     
-    def extract_entities(self, memory_content: str) -> Dict[str, List[str]]:
+    def _categorize_with_patterns(self, content: str) -> Dict[str, Any]:
         """
-        Extract entities from memory content.
+        Categorize memory using pattern matching (original method).
         
+        Args:
+            content: Memory content
+            
         Returns:
-            {
-                'people': ['Alice', 'Bob'],
-                'places': ['Paris', 'Tokyo'],
-                'topics': ['python', 'machine learning'],
-                'dates': ['2024-01-15', 'next week']
-            }
+            Dict with categorization result
         """
-        entities = {
-            'people': [],
-            'places': [],
-            'topics': [],
-            'dates': []
+        content_lower = content.lower()
+        
+        # PREFERENCE patterns
+        preference_patterns = [
+            r'\b(i|my)\s+(like|love|prefer|enjoy|hate|dislike|can\'?t stand)\b',
+            r'\bmy\s+favorite\b',
+            r'\bi\'?m\s+(interested in|into|passionate about)\b',
+            r'\bi\s+(don\'?t|do not)\s+(like|enjoy|want)\b',
+            r'\bi\s+would\s+(rather|prefer)\b',
+        ]
+        
+        for pattern in preference_patterns:
+            if re.search(pattern, content_lower):
+                return {
+                    'type': MemoryType.PREFERENCE,
+                    'confidence': 0.8,
+                    'reasoning': 'Pattern match: preference expression detected'
+                }
+        
+        # FACT patterns (personal information)
+        fact_patterns = [
+            r'\bmy\s+name\s+is\b',
+            r'\bi\s+(work|study|live|am|have)\s+(at|in|a|an)\b',
+            r'\bi\'?m\s+(a|an)\s+\w+\b',
+            r'\bi\s+have\s+(a|an|\d+)\b',
+            r'\bmy\s+(job|career|profession|occupation)\b',
+            r'\bi\s+(was born|grew up)\b',
+            r'\bmy\s+(age|birthday|location)\b',
+        ]
+        
+        for pattern in fact_patterns:
+            if re.search(pattern, content_lower):
+                return {
+                    'type': MemoryType.FACT,
+                    'confidence': 0.85,
+                    'reasoning': 'Pattern match: factual personal information'
+                }
+        
+        # EVENT patterns (experiences, memories)
+        event_patterns = [
+            r'\b(remember|recall|reminds me)\b',
+            r'\b(when i|i once|i used to)\b',
+            r'\b(happened|occurred|took place)\b',
+            r'\b(experience|memory|story)\b',
+            r'\b(yesterday|last week|ago)\b',
+            r'\bi\s+(went|did|saw|met)\b',
+        ]
+        
+        for pattern in event_patterns:
+            if re.search(pattern, content_lower):
+                return {
+                    'type': MemoryType.EVENT,
+                    'confidence': 0.75,
+                    'reasoning': 'Pattern match: event or experience description'
+                }
+        
+        # Default to CONTEXT for everything else
+        # Longer messages are more likely to be context
+        confidence = 0.6 if len(content.split()) > 15 else 0.5
+        
+        return {
+            'type': MemoryType.CONTEXT,
+            'confidence': confidence,
+            'reasoning': 'No specific patterns matched, categorized as conversational context'
         }
-        
-        # Extract people (proper names in context)
-        people_patterns = [
-            r'(?:my |)(?:friend|colleague|boss|partner|wife|husband|brother|sister|son|daughter|mom|dad|mother|father) (?:named |called |)([A-Z][a-z]+)',
-            r'([A-Z][a-z]+) (?:is|was|said|thinks|works|lives)',
-            r'(?:met|saw|talked to|called|messaged) ([A-Z][a-z]+)'
-        ]
-        
-        for pattern in people_patterns:
-            matches = re.findall(pattern, memory_content)
-            entities['people'].extend(matches)
-        
-        # Remove common words that might be misidentified
-        common_words = {'Today', 'Tomorrow', 'Yesterday', 'Next', 'Last', 'This', 
-                       'That', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 
-                       'Friday', 'Saturday', 'Sunday', 'January', 'February',
-                       'March', 'April', 'May', 'June', 'July', 'August',
-                       'September', 'October', 'November', 'December'}
-        entities['people'] = [p for p in entities['people'] if p not in common_words]
-        
-        # Extract places (cities, countries - simple pattern)
-        place_patterns = [
-            r'(?:in|at|from|to|visit|traveled to|living in) ([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)',
-            r'([A-Z][a-z]+) is (?:beautiful|amazing|lovely|nice)'
-        ]
-        
-        for pattern in place_patterns:
-            matches = re.findall(pattern, memory_content)
-            # Filter out people names
-            places = [m for m in matches if m not in entities['people']]
-            entities['places'].extend(places)
-        
-        # Extract topics (technical terms, interests)
-        # Look for lowercase technical terms or repeated words
-        words = memory_content.lower().split()
-        # Topics are words that appear with context indicators
-        topic_indicators = ['learn', 'study', 'interest', 'hobby', 'about', 'using', 
-                          'programming', 'language', 'framework', 'tool']
-        
-        for i, word in enumerate(words):
-            if any(ind in words[max(0,i-3):i+3] for ind in topic_indicators):
-                if len(word) > 4 and word.isalpha():
-                    entities['topics'].append(word)
-        
-        # Extract dates
-        date_patterns = [
-            r'\b\d{4}-\d{2}-\d{2}\b',  # ISO format
-            r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}(?:st|nd|rd|th)?,? \d{4}\b',
-            r'\b(?:next|last) (?:week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
-            r'\byesterday|today|tomorrow\b',
-            r'\b\d{1,2}/\d{1,2}/\d{2,4}\b'
-        ]
-        
-        for pattern in date_patterns:
-            matches = re.findall(pattern, memory_content, re.IGNORECASE)
-            entities['dates'].extend(matches)
-        
-        # Deduplicate and clean
-        for key in entities:
-            entities[key] = list(set(entities[key]))
-            # Remove empty strings
-            entities[key] = [e for e in entities[key] if e.strip()]
-        
-        return entities
     
-    def is_similar_topic(
+    async def _categorize_with_llm(
         self,
-        entities1: Dict[str, List[str]],
-        entities2: Dict[str, List[str]]
-    ) -> Tuple[bool, float]:
+        content: str,
+        context: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
-        Check if two memories have similar topics/entities.
+        Categorize memory using LLM (AI chaining for semantic understanding).
         
+        Args:
+            content: Memory content
+            context: Optional conversation context
+            
         Returns:
-            (is_similar, similarity_score)
+            Dict with categorization result
         """
-        if not entities1 or not entities2:
-            return False, 0.0
+        if not self.llm_client:
+            logger.debug("LLM client not available for memory categorization")
+            return {
+                'type': MemoryType.CONTEXT,
+                'confidence': 0.0,
+                'reasoning': 'LLM not available'
+            }
         
-        score = 0.0
-        max_score = 0.0
+        # Build context string
+        context_str = ""
+        if context:
+            context_str = f"\n\nConversation context:\n{context}"
         
-        # Compare people
-        if entities1['people'] and entities2['people']:
-            people1 = set(entities1['people'])
-            people2 = set(entities2['people'])
-            overlap = len(people1 & people2)
-            if overlap > 0:
-                score += overlap * 0.4  # People overlap is very important
-            max_score += 0.4
-        
-        # Compare places
-        if entities1['places'] and entities2['places']:
-            places1 = set(entities1['places'])
-            places2 = set(entities2['places'])
-            overlap = len(places1 & places2)
-            if overlap > 0:
-                score += overlap * 0.2
-            max_score += 0.2
-        
-        # Compare topics
-        if entities1['topics'] and entities2['topics']:
-            topics1 = set(entities1['topics'])
-            topics2 = set(entities2['topics'])
-            overlap = len(topics1 & topics2)
-            if overlap > 0:
-                score += overlap * 0.3
-            max_score += 0.3
-        
-        # Compare dates
-        if entities1['dates'] and entities2['dates']:
-            dates1 = set(entities1['dates'])
-            dates2 = set(entities2['dates'])
-            overlap = len(dates1 & dates2)
-            if overlap > 0:
-                score += overlap * 0.1
-            max_score += 0.1
-        
-        if max_score == 0:
-            return False, 0.0
-        
-        similarity = score / max_score if max_score > 0 else 0.0
-        is_similar = similarity > 0.3
-        
-        return is_similar, similarity
-    
-    def get_category_description(self, category: str) -> str:
-        """Get human-readable description of category."""
-        descriptions = {
-            'personal_fact': 'Facts about you (name, job, location, etc.)',
-            'preference': 'Your likes, dislikes, and preferences',
-            'goal': 'Your goals and aspirations',
-            'event': 'Past events and experiences',
-            'relationship': 'Information about people in your life',
-            'challenge': 'Problems, struggles, and obstacles',
-            'achievement': 'Accomplishments and successes',
-            'knowledge': 'General knowledge and facts',
-            'instruction': 'How you want the AI to behave'
-        }
-        return descriptions.get(category, 'Uncategorized memory')
+        prompt = f"""Categorize this memory into the most appropriate type.
 
+Memory to categorize: "{content}"{context_str}
+
+Memory Types:
+1. **FACT** - Objective personal information
+   - Examples: "I work at Google", "My name is John", "I live in NYC", "I have 2 kids"
+   - Characteristics: Verifiable, stable, biographical information
+
+2. **PREFERENCE** - Subjective likes, dislikes, opinions
+   - Examples: "I like chocolate", "I hate mornings", "My favorite color is blue"
+   - Characteristics: Personal taste, opinions, interests, values
+
+3. **EVENT** - Experiences, memories, stories, past occurrences
+   - Examples: "I went to Paris last year", "Chocolate reminds me of my grandmother"
+   - Characteristics: Time-bound, narrative, experiential, emotional memories
+
+4. **CONTEXT** - Conversational topics, general discussion
+   - Examples: "We were talking about AI", "This is about climate change"
+   - Characteristics: Topic references, meta-conversation, general context
+
+Categorization Guidelines:
+- Focus on the PRIMARY purpose and nature of the memory
+- Consider emotional vs factual content
+- Time-bound experiences → EVENT
+- Stable personal info → FACT
+- Subjective opinions → PREFERENCE
+- Topic references → CONTEXT
+
+Return ONLY valid JSON:
+{{
+  "type": "fact|preference|event|context",
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation of why this category fits best"
+}}
+
+JSON:"""
+        
+        try:
+            response = await self.llm_client.chat([
+                {"role": "system", "content": "You are a memory categorization expert. Output only valid JSON."},
+                {"role": "user", "content": prompt}
+            ])
+            
+            # Parse JSON response
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            if not json_match:
+                logger.warning("No JSON found in LLM categorization response")
+                return {
+                    'type': MemoryType.CONTEXT,
+                    'confidence': 0.0,
+                    'reasoning': 'Failed to parse LLM response'
+                }
+            
+            result = json.loads(json_match.group())
+            
+            # Validate and map type
+            type_map = {
+                'fact': MemoryType.FACT,
+                'preference': MemoryType.PREFERENCE,
+                'event': MemoryType.EVENT,
+                'context': MemoryType.CONTEXT
+            }
+            
+            memory_type_str = result.get('type', 'context').lower()
+            memory_type = type_map.get(memory_type_str, MemoryType.CONTEXT)
+            confidence = float(result.get('confidence', 0.5))
+            reasoning = result.get('reasoning', 'LLM categorization')
+            
+            # Validate confidence range
+            confidence = max(0.0, min(1.0, confidence))
+            
+            logger.info(
+                f"LLM categorized as {memory_type.value} "
+                f"(confidence: {confidence:.2f})"
+            )
+            
+            return {
+                'type': memory_type,
+                'confidence': confidence,
+                'reasoning': reasoning
+            }
+            
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse LLM categorization JSON: {e}")
+            return {
+                'type': MemoryType.CONTEXT,
+                'confidence': 0.0,
+                'reasoning': 'JSON parse error'
+            }
+        except Exception as e:
+            logger.error(f"LLM categorization failed: {e}")
+            return {
+                'type': MemoryType.CONTEXT,
+                'confidence': 0.0,
+                'reasoning': f'Error: {str(e)}'
+            }

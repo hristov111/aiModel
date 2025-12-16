@@ -1,8 +1,11 @@
-"""Detect personality preferences from natural language."""
+"""Detect personality preferences from natural language with AI chaining."""
 
 import re
+import json
 import logging
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -11,11 +14,29 @@ class PersonalityDetector:
     """
     Detects personality preferences from user messages.
     
+    Supports multiple detection methods:
+    - Pattern-based (regex matching)
+    - LLM-based (AI chaining for intelligent detection)
+    - Hybrid (LLM with pattern fallback)
+    
     Allows users to configure AI personality using natural language like:
     - "Be like a wise mentor"
     - "I want you to be more enthusiastic"
     - "Act like a supportive friend"
+    - "I need someone who really gets me" (AI chaining detects this!)
     """
+    
+    def __init__(self, llm_client=None, method: str = None):
+        """
+        Initialize personality detector.
+        
+        Args:
+            llm_client: Optional LLM client for AI-based detection
+            method: Detection method ("llm", "pattern", "hybrid"). Defaults to config.
+        """
+        self.llm_client = llm_client
+        self.method = method or settings.personality_detection_method.lower()
+        logger.info(f"PersonalityDetector initialized with method: {self.method}")
     
     # Archetype detection patterns
     ARCHETYPE_PATTERNS = {
@@ -82,6 +103,15 @@ class PersonalityDetector:
             r'(explore|discover) together',
             r'(curious|inquisitive)',
             r'let\'?s (explore|investigate)'
+        ],
+        'girlfriend': [
+            r'(be |act |)like (my |a |)girlfriend',
+            r'be my (romantic |)partner',
+            r'(romantic|affectionate) (companion|relationship)',
+            r'talk to me like (a girlfriend|we\'?re dating)',
+            r'(loving|caring) girlfriend',
+            r'be (romantic|affectionate)',
+            r'treat me like (your boyfriend|we\'?re together)'
         ]
     }
     
@@ -255,12 +285,13 @@ class PersonalityDetector:
         'assistant': [r'(be |act like an |)assistant', r'helper', r'support']
     }
     
-    def detect(self, message: str) -> Optional[Dict[str, Any]]:
+    async def detect(self, message: str, context: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
         """
-        Detect personality configuration from message.
+        Detect personality configuration from message using configured method.
         
         Args:
             message: User message
+            context: Optional conversation context
             
         Returns:
             Dict with detected personality config or None
@@ -268,6 +299,31 @@ class PersonalityDetector:
         if not message or len(message.strip()) < 5:
             return None
         
+        # Choose detection method
+        if self.method == "llm":
+            return await self._detect_with_llm(message, context)
+        elif self.method == "pattern":
+            return self._detect_with_patterns(message)
+        else:  # hybrid (default)
+            # Try LLM first
+            llm_result = await self._detect_with_llm(message, context)
+            if llm_result and len(llm_result) > 0:
+                logger.debug(f"Using LLM personality detection")
+                return llm_result
+            # Fallback to patterns
+            logger.debug("LLM detection returned nothing, falling back to patterns")
+            return self._detect_with_patterns(message)
+    
+    def _detect_with_patterns(self, message: str) -> Optional[Dict[str, Any]]:
+        """
+        Detect personality using pattern matching (original method).
+        
+        Args:
+            message: User message
+            
+        Returns:
+            Dict with personality config or None
+        """
         message_lower = message.lower()
         config = {}
         
@@ -275,31 +331,177 @@ class PersonalityDetector:
         archetype = self._detect_archetype(message_lower)
         if archetype:
             config['archetype'] = archetype
-            logger.info(f"Detected archetype: {archetype}")
+            logger.info(f"Pattern detected archetype: {archetype}")
         
         # Detect trait adjustments
         traits = self._detect_traits(message_lower)
         if traits:
             config['traits'] = traits
-            logger.info(f"Detected trait adjustments: {traits}")
+            logger.info(f"Pattern detected trait adjustments: {traits}")
         
         # Detect behavior toggles
         behaviors = self._detect_behaviors(message_lower)
         if behaviors:
             config['behaviors'] = behaviors
-            logger.info(f"Detected behavior changes: {behaviors}")
+            logger.info(f"Pattern detected behavior changes: {behaviors}")
         
         # Detect relationship type
         relationship = self._detect_relationship(message_lower)
         if relationship:
             config['relationship_type'] = relationship
-            logger.info(f"Detected relationship type: {relationship}")
+            logger.info(f"Pattern detected relationship type: {relationship}")
         
         # Detect custom instructions
         if any(phrase in message_lower for phrase in ['i want you to', 'you should', 'please']):
             config['custom_instructions'] = message
         
         return config if config else None
+    
+    async def _detect_with_llm(self, message: str, context: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+        """
+        Detect personality configuration using LLM (AI chaining).
+        
+        Args:
+            message: User message
+            context: Optional conversation context
+            
+        Returns:
+            Dict with personality config or None
+        """
+        if not self.llm_client:
+            logger.debug("LLM client not available for personality detection")
+            return None
+        
+        # Build context string
+        context_str = ""
+        if context and len(context) > 0:
+            context_str = "\nRecent conversation:\n" + "\n".join(f"- {msg}" for msg in context[-3:])
+        
+        prompt = f"""Analyze if this message contains personality or communication style preferences for an AI assistant.
+
+Current message: "{message}"{context_str}
+
+Identify:
+1. Personality archetype (if mentioned)
+2. Trait adjustments (0-10 scales)
+3. Behavioral preferences
+4. Relationship type
+5. Custom instructions
+
+Available archetypes:
+- wise_mentor: Thoughtful advisor who challenges and guides
+- supportive_friend: Warm, caring, non-judgmental listener
+- professional_coach: Results-oriented, holds accountable
+- creative_partner: Brainstorms, explores ideas together
+- calm_therapist: Patient, helps process emotions
+- enthusiastic_cheerleader: Energetic supporter, celebrates wins
+- pragmatic_advisor: Direct, practical, no-nonsense advice
+- curious_student: Learns alongside, asks questions
+- girlfriend: Romantic, affectionate companion
+
+Traits (0-10 scales):
+- humor_level: 0=serious, 10=very humorous
+- formality_level: 0=casual, 10=very formal
+- enthusiasm_level: 0=reserved, 10=very enthusiastic
+- empathy_level: 0=logical, 10=highly empathetic
+- directness_level: 0=indirect, 10=very direct
+- curiosity_level: 0=passive, 10=very curious
+- supportiveness_level: 0=challenging, 10=highly supportive
+- playfulness_level: 0=serious, 10=very playful
+
+Behaviors (true/false):
+- asks_questions: Should AI ask questions?
+- uses_examples: Should AI give examples?
+- shares_opinions: Should AI share opinions?
+- challenges_user: Should AI challenge/push user?
+- celebrates_wins: Should AI celebrate achievements?
+
+Relationship types:
+friend, mentor, coach, therapist, partner, advisor, assistant, girlfriend
+
+Return ONLY valid JSON:
+{{
+  "archetype": "archetype_name or null",
+  "traits": {{
+    "trait_name": 0-10 value
+  }},
+  "behaviors": {{
+    "behavior_name": true/false
+  }},
+  "relationship_type": "type or null",
+  "custom_instructions": "any specific requests or null",
+  "confidence": 0.0-1.0,
+  "reasoning": "why this was detected"
+}}
+
+If NO personality preferences detected, return: {{"confidence": 0.0}}
+
+JSON:"""
+        
+        try:
+            response = await self.llm_client.chat([
+                {"role": "system", "content": "You are a personality configuration expert. Output only valid JSON."},
+                {"role": "user", "content": prompt}
+            ])
+            
+            # Parse JSON response
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            if not json_match:
+                logger.warning("No JSON found in LLM personality response")
+                return None
+            
+            result = json.loads(json_match.group())
+            
+            # Validate result
+            confidence = result.get('confidence', 0)
+            if confidence < 0.3:
+                return None
+            
+            # Build config from result
+            config = {}
+            
+            if result.get('archetype'):
+                config['archetype'] = result['archetype']
+            
+            if result.get('traits'):
+                # Validate trait values are 0-10
+                valid_traits = {}
+                for trait, value in result['traits'].items():
+                    if isinstance(value, (int, float)) and 0 <= value <= 10:
+                        valid_traits[trait] = int(value)
+                if valid_traits:
+                    config['traits'] = valid_traits
+            
+            if result.get('behaviors'):
+                # Validate boolean values
+                valid_behaviors = {}
+                for behavior, value in result['behaviors'].items():
+                    if isinstance(value, bool):
+                        valid_behaviors[behavior] = value
+                if valid_behaviors:
+                    config['behaviors'] = valid_behaviors
+            
+            if result.get('relationship_type'):
+                config['relationship_type'] = result['relationship_type']
+            
+            if result.get('custom_instructions'):
+                config['custom_instructions'] = result['custom_instructions']
+            
+            if config:
+                logger.info(
+                    f"LLM detected personality config: {list(config.keys())} "
+                    f"(confidence: {confidence:.2f})"
+                )
+                return config
+            
+            return None
+            
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse LLM personality JSON: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"LLM personality detection failed: {e}")
+            return None
     
     def _detect_archetype(self, message: str) -> Optional[str]:
         """Detect personality archetype."""

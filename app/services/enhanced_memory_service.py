@@ -69,7 +69,7 @@ class EnhancedMemoryService:
             Created Memory object
         """
         # Generate embedding
-        embedding = self.embedding_generator.generate(content)
+        embedding = self.embedding_generator.generate_embedding(content)
         
         # Categorize memory
         category = self.categorizer.categorize(content, memory_type)
@@ -138,7 +138,7 @@ class EnhancedMemoryService:
             List of Memory objects
         """
         # Generate query embedding
-        query_embedding = self.embedding_generator.generate(query_text)
+        query_embedding = self.embedding_generator.generate_embedding(query_text)
         
         # Build query
         stmt = select(MemoryModel).where(
@@ -441,15 +441,77 @@ class EnhancedMemoryService:
         result = await self.db.execute(stmt)
         recent_memories = result.scalars().all()
         
+        # Convert to Memory objects for consolidation engine
+        new_mem_obj = self._model_to_memory(new_memory)
+        
         # Check similarity with each
         for mem in recent_memories:
-            # Simple similarity check
-            if self._calculate_simple_similarity(new_memory.embedding, mem.embedding) > 0.9:
-                logger.info(
-                    f"Found potential duplicate for memory {new_memory.id}: "
-                    f"similar to {mem.id}"
+            # Calculate similarity
+            similarity = self._calculate_simple_similarity(new_memory.embedding, mem.embedding)
+            
+            # Check if they should be consolidated
+            if similarity > 0.7:  # Lower threshold to catch contradictions
+                mem_obj = self._model_to_memory(mem)
+                
+                # Determine consolidation strategy
+                strategy = self.consolidation_engine.suggest_consolidation_strategy(
+                    mem_obj, new_mem_obj, similarity
                 )
-                # Could auto-consolidate here or flag for review
+                
+                logger.info(
+                    f"Found similar memory {mem.id} for new memory {new_memory.id}. "
+                    f"Similarity: {similarity:.2f}, Strategy: {strategy}"
+                )
+                
+                # Handle supersede strategy (for contradictions)
+                if strategy == 'supersede':
+                    # Determine which one is newer
+                    if new_memory.created_at > mem.created_at:
+                        # New memory supersedes old one
+                        logger.info(
+                            f"Superseding old memory {mem.id} with new memory {new_memory.id}. "
+                            f"Old: '{mem.content}', New: '{new_memory.content}'"
+                        )
+                        mem.is_active = False
+                        mem.superseded_by = new_memory.id
+                        mem.updated_at = datetime.utcnow()
+                    else:
+                        # Old memory is newer (shouldn't happen but handle it)
+                        logger.info(
+                            f"New memory {new_memory.id} is superseded by existing {mem.id}. "
+                            f"Marking new as inactive."
+                        )
+                        new_memory.is_active = False
+                        new_memory.superseded_by = mem.id
+                        new_memory.updated_at = datetime.utcnow()
+                
+                # Handle update strategy
+                elif strategy == 'update':
+                    # Update the older memory with new content
+                    if new_memory.created_at > mem.created_at:
+                        logger.info(f"Updating memory {mem.id} with content from {new_memory.id}")
+                        mem.content = new_memory.content
+                        mem.embedding = new_memory.embedding
+                        mem.importance = max(mem.importance, new_memory.importance)
+                        mem.updated_at = datetime.utcnow()
+                        
+                        # Mark new one as inactive (merged into old)
+                        new_memory.is_active = False
+                        new_memory.superseded_by = mem.id
+                    else:
+                        # Update new with old (rare case)
+                        new_memory.content = mem.content
+                        new_memory.embedding = mem.embedding
+                        new_memory.importance = max(mem.importance, new_memory.importance)
+                        
+                        # Mark old as inactive
+                        mem.is_active = False
+                        mem.superseded_by = new_memory.id
+                
+                # Commit changes
+                await self.db.commit()
+                
+                # Only consolidate with first match to avoid cascading updates
                 break
     
     def _apply_temporal_decay(self, memory: MemoryModel) -> float:
@@ -487,14 +549,20 @@ class EnhancedMemoryService:
     
     def _model_to_memory(self, model: MemoryModel) -> Memory:
         """Convert MemoryModel to Memory domain object."""
-        from app.models.memory import MemoryTypeEnum
+        from app.models.memory import MemoryType
+        
+        # Convert memory_type string to MemoryType enum
+        try:
+            mem_type = MemoryType(model.memory_type)
+        except:
+            mem_type = MemoryType.FACT  # Default fallback
         
         return Memory(
             id=model.id,
             conversation_id=model.conversation_id,
             content=model.content,
             embedding=model.embedding,
-            memory_type=model.memory_type,
+            memory_type=mem_type,
             importance=model.importance,
             created_at=model.created_at,
             metadata=model.extra_metadata or {},

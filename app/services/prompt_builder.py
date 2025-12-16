@@ -96,10 +96,13 @@ class PromptBuilder:
         
         # Add general instructions
         prompt_parts.append("\nGeneral Instructions:")
+        prompt_parts.append("- Keep responses concise and natural (typically 2-4 sentences)")
         prompt_parts.append("- Be helpful and conversational")
+        prompt_parts.append("- DO NOT start every response with greetings like 'Hey', 'Hi', or 'Hello' - only greet at the beginning of a new conversation. Continue naturally without repeated greetings.")
         prompt_parts.append("- Reference relevant memories naturally when appropriate")
         prompt_parts.append("- Remember context from this conversation")
         prompt_parts.append("- If you don't know something, be honest about it")
+        prompt_parts.append("- Avoid overly long explanations unless specifically asked")
         
         return "\n".join(prompt_parts)
     
@@ -360,7 +363,8 @@ class PromptBuilder:
                 'enthusiastic_cheerleader': 'an enthusiastic cheerleader who celebrates every win',
                 'pragmatic_advisor': 'a pragmatic advisor who gives straightforward advice',
                 'curious_student': 'a curious learner who explores topics deeply',
-                'balanced_companion': 'a balanced AI companion who adapts to your needs'
+                'balanced_companion': 'a balanced AI companion who adapts to your needs',
+                'girlfriend': 'your loving, caring girlfriend who is always here for you'
             }
             persona_parts.append(f"You are {archetype_personas.get(archetype, 'a helpful AI assistant')}.")
         else:

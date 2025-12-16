@@ -17,21 +17,23 @@ logger = logging.getLogger(__name__)
 class EmotionService:
     """Manages emotion detection, storage, and analysis."""
     
-    def __init__(self, db_session: AsyncSession):
+    def __init__(self, db_session: AsyncSession, llm_client=None):
         """
         Initialize emotion service.
         
         Args:
             db_session: Database session
+            llm_client: Optional LLM client for AI-based emotion detection
         """
         self.db = db_session
-        self.detector = EmotionDetector()
+        self.detector = EmotionDetector(llm_client=llm_client)
     
     async def detect_and_store(
         self,
         user_id: UUID,
         message: str,
-        conversation_id: Optional[UUID] = None
+        conversation_id: Optional[UUID] = None,
+        context: Optional[List[str]] = None
     ) -> Optional[DetectedEmotion]:
         """
         Detect emotion from message and store in history.
@@ -40,12 +42,13 @@ class EmotionService:
             user_id: User ID
             message: User message text
             conversation_id: Optional conversation ID
+            context: Optional list of previous messages for context
             
         Returns:
             DetectedEmotion object or None
         """
-        # Detect emotion
-        emotion = self.detector.detect(message)
+        # Detect emotion (now async with context support)
+        emotion = await self.detector.detect(message, context=context)
         
         if not emotion:
             return None

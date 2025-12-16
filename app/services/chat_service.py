@@ -54,14 +54,15 @@ class ChatService:
         self.preference_service = preference_service
         self.emotion_service = emotion_service
         self.personality_service = personality_service
-        self.personality_detector = PersonalityDetector() if personality_service else None
+        self.personality_detector = PersonalityDetector(llm_client=llm_client) if personality_service else None
         self.goal_service = goal_service
     
     async def stream_chat(
         self,
         user_message: str,
         conversation_id: UUID = None,
-        user_id: str = None
+        user_id: str = None,
+        db_session = None
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Process chat message and stream response with thinking steps.
@@ -70,6 +71,7 @@ class ChatService:
             user_message: User's message
             conversation_id: Optional conversation ID (creates new if None)
             user_id: External user ID for memory isolation
+            db_session: Database session for UUID lookup
             
         Yields:
             Dictionaries with event type and data:
@@ -81,6 +83,42 @@ class ChatService:
         if conversation_id is None:
             conversation_id = uuid4()
             logger.info(f"Created new conversation: {conversation_id} for user: {user_id}")
+        
+        # Try to get database UUID for user (if they're registered)
+        user_db_id = None
+        if user_id and db_session:
+            try:
+                from app.core.auth import get_user_db_id
+                user_db_id = await get_user_db_id(db_session, user_id)
+                if user_db_id:
+                    logger.info(f"Resolved user {user_id} to database UUID: {user_db_id}")
+            except Exception as e:
+                logger.debug(f"Could not resolve user DB ID: {e}")
+        
+        # Create conversation record in database if user is registered
+        if user_db_id and db_session:
+            try:
+                from app.models.database import ConversationModel
+                from sqlalchemy import select
+                
+                # Check if conversation already exists
+                result = await db_session.execute(
+                    select(ConversationModel).where(ConversationModel.id == conversation_id)
+                )
+                existing_conv = result.scalar_one_or_none()
+                
+                if not existing_conv:
+                    # Create new conversation record
+                    conversation = ConversationModel(
+                        id=conversation_id,
+                        user_id=user_db_id
+                    )
+                    db_session.add(conversation)
+                    await db_session.commit()
+                    logger.info(f"Created conversation record in database: {conversation_id}")
+            except Exception as e:
+                logger.warning(f"Could not create conversation in database: {e}")
+                # Continue anyway - conversation will work in-memory
         
         try:
             # Emit processing start
@@ -99,42 +137,85 @@ class ChatService:
                 content=user_message
             )
             
+            yield {
+                "type": "thinking",
+                "step": "message_stored",
+                "data": {"message": "Message received and stored"},
+                "conversation_id": str(conversation_id),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
             # Step 2: Auto-detect and update preferences if present
             preferences_updated = False
             if self.preference_service and user_id:
+                yield {
+                    "type": "thinking",
+                    "step": "checking_preferences",
+                    "data": {"message": "Analyzing communication preferences..."},
+                    "conversation_id": str(conversation_id),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
                 await self.preference_service.extract_and_update_preferences(
                     external_user_id=user_id,
                     message_content=user_message
                 )
                 preferences_updated = True
-            
-            # Step 3: Auto-detect and update personality if mentioned
-            personality_detected = False
-            if self.personality_service and self.personality_detector and user_id:
-                personality_config_detected = self.personality_detector.detect(user_message)
-                if personality_config_detected:
-                    await self.personality_service.update_personality(
-                        user_id=UUID(user_id),
-                        archetype=personality_config_detected.get('archetype'),
-                        traits=personality_config_detected.get('traits'),
-                        behaviors=personality_config_detected.get('behaviors'),
-                        custom_config={'custom_instructions': personality_config_detected.get('custom_instructions')} if personality_config_detected.get('custom_instructions') else None,
-                        merge=True
-                    )
-                    logger.info(f"Auto-updated personality for user {user_id}")
-                    personality_detected = True
-                    
+                
+                if preferences_updated:
                     yield {
                         "type": "thinking",
-                        "step": "personality_detected",
-                        "data": {
-                            "message": "Updated personality preferences",
-                            "archetype": personality_config_detected.get('archetype'),
-                            "traits": personality_config_detected.get('traits', {})
-                        },
+                        "step": "preferences_updated",
+                        "data": {"message": "Communication preferences analyzed"},
                         "conversation_id": str(conversation_id),
                         "timestamp": datetime.utcnow().isoformat()
                     }
+            
+            # Step 3: Auto-detect and update personality if mentioned
+            personality_detected = False
+            if self.personality_service and self.personality_detector and user_db_id:
+                yield {
+                    "type": "thinking",
+                    "step": "checking_personality",
+                    "data": {"message": "Checking for personality configuration..."},
+                    "conversation_id": str(conversation_id),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                # Get recent messages for context
+                recent_messages_for_personality = self.conversation_buffer.get_recent_messages(conversation_id)
+                context_for_personality = [msg.content for msg in recent_messages_for_personality[-3:]]
+                
+                personality_config_detected = await self.personality_detector.detect(
+                    user_message,
+                    context=context_for_personality if context_for_personality else None
+                )
+                if personality_config_detected:
+                    try:
+                        await self.personality_service.update_personality(
+                            user_id=user_db_id,
+                            archetype=personality_config_detected.get('archetype'),
+                            traits=personality_config_detected.get('traits'),
+                            behaviors=personality_config_detected.get('behaviors'),
+                            custom_config={'custom_instructions': personality_config_detected.get('custom_instructions')} if personality_config_detected.get('custom_instructions') else None,
+                            merge=True
+                        )
+                        logger.info(f"Auto-updated personality for user {user_id}")
+                        personality_detected = True
+                        
+                        yield {
+                            "type": "thinking",
+                            "step": "personality_detected",
+                            "data": {
+                                "message": "Updated personality preferences",
+                                "archetype": personality_config_detected.get('archetype'),
+                                "traits": personality_config_detected.get('traits', {})
+                            },
+                            "conversation_id": str(conversation_id),
+                            "timestamp": datetime.utcnow().isoformat()
+                        }
+                    except Exception as e:
+                        logger.warning(f"Could not update personality: {e}")
             
             # Step 4: Get user preferences for HARD ENFORCEMENT
             user_preferences = None
@@ -144,14 +225,17 @@ class ChatService:
             # Step 5: Get personality configuration
             personality_config = None
             relationship_state = None
-            if self.personality_service and user_id:
-                personality_config = await self.personality_service.get_personality(UUID(user_id))
-                relationship_state = await self.personality_service.get_relationship_state(UUID(user_id))
-                # Update relationship metrics
-                await self.personality_service.update_relationship_metrics(
-                    user_id=UUID(user_id),
-                    message_sent=True
-                )
+            if self.personality_service and user_db_id:
+                try:
+                    personality_config = await self.personality_service.get_personality(user_db_id)
+                    relationship_state = await self.personality_service.get_relationship_state(user_db_id)
+                    # Update relationship metrics
+                    await self.personality_service.update_relationship_metrics(
+                        user_id=user_db_id,
+                        message_sent=True
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not load personality for user {user_id}: {e}")
                 
                 if personality_config:
                     yield {
@@ -170,57 +254,86 @@ class ChatService:
             # Step 6: Detect emotion from user message
             detected_emotion = None
             emotion_context = None
-            if self.emotion_service and user_id:
-                # Detect and store emotion asynchronously
-                emotion = await self.emotion_service.detect_and_store(
-                    user_id=UUID(user_id),
-                    message=user_message,
-                    conversation_id=conversation_id
-                )
-                
-                if emotion:
-                    detected_emotion = {
-                        'emotion': emotion.emotion,
-                        'confidence': emotion.confidence,
-                        'intensity': emotion.intensity
-                    }
-                    logger.info(f"Detected emotion: {emotion.emotion} ({emotion.confidence:.2f})")
-                    
-                    # Emit emotion detection
+            if self.emotion_service and user_db_id:
+                try:
                     yield {
                         "type": "thinking",
-                        "step": "emotion_detected",
-                        "data": {
-                            "message": f"Detected emotion: {emotion.emotion}",
-                            "emotion": emotion.emotion,
-                            "confidence": round(emotion.confidence, 2),
-                            "intensity": emotion.intensity
-                        },
+                        "step": "analyzing_emotion",
+                        "data": {"message": "Analyzing emotional state..."},
                         "conversation_id": str(conversation_id),
                         "timestamp": datetime.utcnow().isoformat()
                     }
                     
-                    # Get emotion trends for context
-                    emotion_context = await self.emotion_service.get_emotion_trends(
-                        user_id=UUID(user_id),
-                        days=30
+                    # Get recent messages for context
+                    recent_messages = self.conversation_buffer.get_recent_messages(conversation_id)
+                    context_messages = [msg.content for msg in recent_messages[-3:] if msg.role == "user"]
+                    
+                    # Detect and store emotion with context
+                    emotion = await self.emotion_service.detect_and_store(
+                        user_id=user_db_id,
+                        message=user_message,
+                        conversation_id=conversation_id,
+                        context=context_messages if context_messages else None
                     )
+                    
+                    if emotion:
+                        detected_emotion = {
+                            'emotion': emotion.emotion,
+                            'confidence': emotion.confidence,
+                            'intensity': emotion.intensity
+                        }
+                        logger.info(f"Detected emotion: {emotion.emotion} ({emotion.confidence:.2f})")
+                        
+                        # Emit emotion detection
+                        yield {
+                            "type": "thinking",
+                            "step": "emotion_detected",
+                            "data": {
+                                "message": f"Detected emotion: {emotion.emotion}",
+                                "emotion": emotion.emotion,
+                                "confidence": round(emotion.confidence, 2),
+                                "intensity": emotion.intensity
+                            },
+                            "conversation_id": str(conversation_id),
+                            "timestamp": datetime.utcnow().isoformat()
+                        }
+                        
+                        # Get emotion trends for context
+                        emotion_context = await self.emotion_service.get_emotion_trends(
+                            user_id=user_db_id,
+                            days=30
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not detect emotions: {e}")
             
             # Step 6.5: Detect and track goals from user message
             goal_context = None
-            if self.goal_service and user_id:
-                goal_tracking_result = await self.goal_service.detect_and_track_goals(
-                    user_id=UUID(user_id),
-                    message=user_message,
-                    conversation_id=conversation_id,
-                    detected_emotion=detected_emotion.get('emotion') if detected_emotion else None
-                )
-                
-                # Get active goals for context
-                active_goals = await self.goal_service.get_user_goals(
-                    user_id=UUID(user_id),
-                    status='active'
-                )
+            if self.goal_service and user_db_id:
+                try:
+                    yield {
+                        "type": "thinking",
+                        "step": "analyzing_goals",
+                        "data": {"message": "Checking for goals and tracking progress..."},
+                        "conversation_id": str(conversation_id),
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                    
+                    goal_tracking_result = await self.goal_service.detect_and_track_goals(
+                        user_id=user_db_id,
+                        message=user_message,
+                        conversation_id=conversation_id,
+                        detected_emotion=detected_emotion.get('emotion') if detected_emotion else None
+                    )
+                    
+                    # Get active goals for context
+                    active_goals = await self.goal_service.get_user_goals(
+                        user_id=user_db_id,
+                        status='active'
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not track goals: {e}")
+                    goal_tracking_result = None
+                    active_goals = []
                 
                 if active_goals:
                     goal_context = {
@@ -255,6 +368,14 @@ class ChatService:
                     }
             
             # Step 7: Retrieve relevant long-term memories
+            yield {
+                "type": "thinking",
+                "step": "retrieving_memories",
+                "data": {"message": "Searching long-term memories..."},
+                "conversation_id": str(conversation_id),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
             relevant_memories = await self.long_term_memory.retrieve_relevant_memories(
                 conversation_id=conversation_id,
                 query_text=user_message
@@ -262,13 +383,21 @@ class ChatService:
             logger.debug(f"Retrieved {len(relevant_memories)} relevant memories")
             
             # Emit memory retrieval
+            memory_preview = []
+            for m in relevant_memories[:3]:
+                memory_preview.append({
+                    "content": m.content[:80] + "..." if len(m.content) > 80 else m.content,
+                    "type": m.memory_type.value if hasattr(m.memory_type, 'value') else str(m.memory_type),
+                    "importance": round(m.importance, 2)
+                })
+            
             yield {
                 "type": "thinking",
                 "step": "memories_retrieved",
                 "data": {
-                    "message": f"Retrieved {len(relevant_memories)} relevant memories",
+                    "message": f"Found {len(relevant_memories)} relevant memories",
                     "count": len(relevant_memories),
-                    "memories": [{"content": m.content[:100], "importance": m.importance_score} for m in relevant_memories[:3]]
+                    "memories": memory_preview
                 },
                 "conversation_id": str(conversation_id),
                 "timestamp": datetime.utcnow().isoformat()
@@ -277,6 +406,17 @@ class ChatService:
             # Step 8: Get recent conversation history and summary
             recent_messages = self.conversation_buffer.get_recent_messages(conversation_id)
             conversation_summary = self.conversation_buffer.get_or_create_summary(conversation_id)
+            
+            yield {
+                "type": "thinking",
+                "step": "building_context",
+                "data": {
+                    "message": "Assembling conversation context...",
+                    "message_count": len(recent_messages)
+                },
+                "conversation_id": str(conversation_id),
+                "timestamp": datetime.utcnow().isoformat()
+            }
             
             # Step 9: Build complete prompt with GOALS + PERSONALITY + EMOTION AWARENESS + HARD PREFERENCE ENFORCEMENT
             system_prompt = self.prompt_builder.build_system_prompt(
@@ -300,15 +440,21 @@ class ChatService:
             )
             
             # Emit prompt built
+            context_summary = {
+                "memories": len(relevant_memories),
+                "messages": len(history_messages),
+                "preferences": user_preferences is not None,
+                "personality": personality_config.get('archetype') if personality_config else None,
+                "emotion": detected_emotion.get('emotion') if detected_emotion else None,
+                "goals": len(goal_context.get('active_goals', [])) if goal_context else 0
+            }
+            
             yield {
                 "type": "thinking",
                 "step": "prompt_built",
                 "data": {
-                    "message": "Context assembled, preparing response",
-                    "context_messages": len(history_messages),
-                    "has_preferences": user_preferences is not None,
-                    "has_personality": personality_config is not None,
-                    "has_emotion": detected_emotion is not None
+                    "message": "AI context assembled and ready",
+                    "context": context_summary
                 },
                 "conversation_id": str(conversation_id),
                 "timestamp": datetime.utcnow().isoformat()
@@ -345,6 +491,14 @@ class ChatService:
             )
             
             # Step 12: Trigger async memory extraction (non-blocking)
+            yield {
+                "type": "thinking",
+                "step": "extracting_memories",
+                "data": {"message": "Extracting important memories (background task)..."},
+                "conversation_id": str(conversation_id),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
             asyncio.create_task(
                 self._extract_memories_async(conversation_id)
             )

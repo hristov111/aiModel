@@ -349,6 +349,17 @@ class MemoryConsolidationEngine:
         
         Returns: 'merge', 'update', 'supersede', or 'keep_both'
         """
+        # Check for contradictions first (most important)
+        if self._is_contradictory(memory1, memory2):
+            # Contradictory memories - newer should supersede older
+            time1 = memory1.created_at
+            time2 = memory2.created_at
+            
+            if time2 > time1:
+                return 'supersede'  # Newer contradicts older
+            else:
+                return 'supersede'  # Still supersede but swap them
+        
         # Very high similarity - likely duplicates
         if similarity >= 0.95:
             # Check if one is clearly newer/better
@@ -384,4 +395,56 @@ class MemoryConsolidationEngine:
         # Below threshold
         else:
             return 'keep_both'
+    
+    def _is_contradictory(
+        self,
+        memory1: Memory,
+        memory2: Memory
+    ) -> bool:
+        """
+        Detect if two memories contradict each other.
+        
+        Looks for opposite sentiment/preferences about the same topic.
+        
+        Returns:
+            True if memories are contradictory, False otherwise
+        """
+        content1 = memory1.content.lower()
+        content2 = memory2.content.lower()
+        
+        # Patterns for positive preferences
+        positive_patterns = [
+            r'\b(i\s+like|i\s+love|i\s+enjoy|i\s+prefer|my\s+favorite|i\'m\s+interested\s+in|i\'m\s+into)\b',
+            r'\b(yes|yeah|yep|sure|definitely|absolutely)\b'
+        ]
+        
+        # Patterns for negative preferences
+        negative_patterns = [
+            r'\b(i\s+don\'t\s+like|i\s+hate|i\s+dislike|i\s+don\'t\s+enjoy|i\s+don\'t\s+prefer|not\s+my\s+favorite)\b',
+            r'\b(no|nope|nah|not\s+really|don\'t|never)\b'
+        ]
+        
+        # Check if one is positive and other is negative
+        has_positive_1 = any(re.search(pattern, content1) for pattern in positive_patterns)
+        has_negative_1 = any(re.search(pattern, content1) for pattern in negative_patterns)
+        has_positive_2 = any(re.search(pattern, content2) for pattern in positive_patterns)
+        has_negative_2 = any(re.search(pattern, content2) for pattern in negative_patterns)
+        
+        # Extract common subject/topic
+        # Remove preference words to find the subject
+        subject1 = re.sub(r'\b(i|like|love|hate|dislike|enjoy|don\'t|do|really|very|much|a|lot)\b', '', content1).strip()
+        subject2 = re.sub(r'\b(i|like|love|hate|dislike|enjoy|don\'t|do|really|very|much|a|lot)\b', '', content2).strip()
+        
+        # Check if they share significant words (same topic)
+        words1 = set(subject1.split())
+        words2 = set(subject2.split())
+        common_words = words1 & words2
+        
+        # If they share common words and have opposite sentiment, they're contradictory
+        if len(common_words) > 0:
+            # One is positive, other is negative
+            if (has_positive_1 and has_negative_2) or (has_negative_1 and has_positive_2):
+                return True
+        
+        return False
 

@@ -58,6 +58,7 @@ class MemoryRetrieval:
             # Generate query embedding
             logger.debug(f"Generating embedding for query: {query_text[:50]}...")
             query_embedding = self.embedding_generator.generate_embedding(query_text)
+            logger.info(f"Generated embedding with {len(query_embedding)} dimensions")
             
             # Search vector store
             memories = await self.vector_store.search_similar(
@@ -102,13 +103,13 @@ class MemoryRetrieval:
             if memory.similarity_score is not None:
                 combined_score = memory.similarity_score * memory.importance
                 # Store in metadata for debugging
-                if memory.extra_metadata is None:
-                    memory.extra_metadata = {}
-                memory.extra_metadata['combined_score'] = combined_score
+                if memory.metadata is None:
+                    memory.metadata = {}
+                memory.metadata['combined_score'] = combined_score
         
         # Sort by combined score
         memories.sort(
-            key=lambda m: m.extra_metadata.get('combined_score', 0) if m.extra_metadata else 0,
+            key=lambda m: m.metadata.get('combined_score', 0) if m.metadata else 0,
             reverse=True
         )
         

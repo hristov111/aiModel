@@ -1,10 +1,13 @@
-"""Advanced emotion detection service with confidence scoring."""
+"""Advanced emotion detection service with confidence scoring and AI chaining."""
 
 import re
 import logging
+import json
 from typing import Dict, Optional, List, Tuple
 from datetime import datetime
 from collections import defaultdict
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +44,23 @@ class EmotionDetector:
     Advanced emotion detection from text messages.
     
     Supports 12+ emotions with confidence scoring, intensity levels,
-    and multiple detection methods (keywords, emojis, phrases, context).
+    and multiple detection methods:
+    - Pattern-based (keywords, emojis, phrases)
+    - LLM-based (AI chaining for context-aware detection)
+    - Hybrid (LLM with pattern fallback)
     """
+    
+    def __init__(self, llm_client=None, method: str = None):
+        """
+        Initialize emotion detector.
+        
+        Args:
+            llm_client: Optional LLM client for AI-based detection
+            method: Detection method ("llm", "pattern", "hybrid"). Defaults to config setting.
+        """
+        self.llm_client = llm_client
+        self.method = method or settings.emotion_detection_method.lower()
+        logger.info(f"EmotionDetector initialized with method: {self.method}")
     
     # Comprehensive emotion patterns with weights
     EMOTIONS = {
@@ -277,12 +295,13 @@ class EmotionDetector:
         'low': ['a bit', 'somewhat', 'kind of', 'kinda', 'slightly', 'a little']
     }
     
-    def detect(self, message: str) -> Optional[DetectedEmotion]:
+    async def detect(self, message: str, context: Optional[List[str]] = None) -> Optional[DetectedEmotion]:
         """
-        Detect emotion from message with confidence scoring.
+        Detect emotion from message using configured method.
         
         Args:
             message: User message text
+            context: Optional list of previous messages for context
             
         Returns:
             DetectedEmotion object or None if no strong emotion detected
@@ -290,6 +309,31 @@ class EmotionDetector:
         if not message or len(message.strip()) < 3:
             return None
         
+        # Choose detection method
+        if self.method == "llm":
+            return await self._detect_with_llm(message, context)
+        elif self.method == "pattern":
+            return self._detect_with_patterns(message)
+        else:  # hybrid (default)
+            # Try LLM first
+            llm_result = await self._detect_with_llm(message, context)
+            if llm_result and llm_result.confidence >= 0.6:
+                logger.debug(f"Using LLM detection result (confidence: {llm_result.confidence:.2f})")
+                return llm_result
+            # Fallback to patterns
+            logger.debug("LLM detection low confidence or failed, falling back to pattern matching")
+            return self._detect_with_patterns(message)
+    
+    def _detect_with_patterns(self, message: str) -> Optional[DetectedEmotion]:
+        """
+        Detect emotion using pattern matching (original method).
+        
+        Args:
+            message: User message text
+            
+        Returns:
+            DetectedEmotion object or None if no strong emotion detected
+        """
         message_lower = message.lower()
         emotion_scores = defaultdict(lambda: {'score': 0.0, 'indicators': []})
         
@@ -333,7 +377,7 @@ class EmotionDetector:
         # Deduplicate indicators
         indicators = list(set(data['indicators']))
         
-        logger.info(f"Detected emotion: {emotion_name} (confidence: {confidence:.2f}, intensity: {intensity})")
+        logger.info(f"Pattern detected emotion: {emotion_name} (confidence: {confidence:.2f}, intensity: {intensity})")
         
         return DetectedEmotion(
             emotion=emotion_name,
@@ -341,6 +385,101 @@ class EmotionDetector:
             indicators=indicators,
             intensity=intensity
         )
+    
+    async def _detect_with_llm(self, message: str, context: Optional[List[str]] = None) -> Optional[DetectedEmotion]:
+        """
+        Detect emotion using LLM (AI chaining for context-aware detection).
+        
+        Args:
+            message: User message text
+            context: Optional list of previous messages for context
+            
+        Returns:
+            DetectedEmotion object or None if no strong emotion detected
+        """
+        if not self.llm_client:
+            logger.debug("LLM client not available for emotion detection")
+            return None
+        
+        # Build context string
+        context_str = ""
+        if context and len(context) > 0:
+            context_str = "\nPrevious messages:\n" + "\n".join(f"- {msg}" for msg in context[-3:])
+        
+        prompt = f"""Analyze the emotional state expressed in this message.
+
+Current message: "{message}"{context_str}
+
+Identify the user's emotional state. Consider:
+- Explicit emotional words
+- Tone and sentiment
+- Context from previous messages
+- Sarcasm, irony, or humor
+- Mixed or complex emotions
+- Subtle emotional cues
+
+Supported emotions:
+happy, sad, angry, anxious, excited, grateful, frustrated, lonely, proud, surprised, disappointed, confused, content, overwhelmed, hopeful, bored
+
+Return ONLY a valid JSON object:
+{{
+  "emotion": "primary emotion name",
+  "secondary_emotions": ["optional", "secondary"],
+  "confidence": 0.0-1.0,
+  "intensity": "low|medium|high",
+  "is_sarcastic": false,
+  "reasoning": "brief explanation"
+}}
+
+If no clear emotion detected, return: {{"emotion": null, "confidence": 0.0}}
+
+JSON:"""
+        
+        try:
+            response = await self.llm_client.chat([
+                {"role": "system", "content": "You are an emotion analysis expert. Output only valid JSON."},
+                {"role": "user", "content": prompt}
+            ])
+            
+            # Parse JSON response
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            if not json_match:
+                logger.warning("No JSON found in LLM emotion response")
+                return None
+            
+            result = json.loads(json_match.group())
+            
+            # Validate result
+            if not result.get('emotion') or result.get('confidence', 0) < 0.3:
+                return None
+            
+            emotion = result['emotion'].lower()
+            confidence = float(result['confidence'])
+            intensity = result.get('intensity', 'medium').lower()
+            
+            # Validate emotion is supported
+            if emotion not in self.EMOTIONS:
+                logger.warning(f"LLM returned unsupported emotion: {emotion}")
+                return None
+            
+            logger.info(
+                f"LLM detected emotion: {emotion} (confidence: {confidence:.2f}, "
+                f"intensity: {intensity}, sarcastic: {result.get('is_sarcastic', False)})"
+            )
+            
+            return DetectedEmotion(
+                emotion=emotion,
+                confidence=min(confidence, 1.0),
+                indicators=['llm', 'context'] if context else ['llm'],
+                intensity=intensity
+            )
+            
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse LLM emotion JSON: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"LLM emotion detection failed: {e}")
+            return None
     
     def _detect_intensity(self, message: str) -> str:
         """Detect emotion intensity from amplifiers."""

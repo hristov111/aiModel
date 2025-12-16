@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     lm_studio_base_url: str = "http://localhost:1234/v1"
     lm_studio_model_name: str = "local-model"
     lm_studio_temperature: float = 0.7
-    lm_studio_max_tokens: int = 2000
+    lm_studio_max_tokens: int = 150  # Shorter responses for faster generation
     
     # Database Configuration
     postgres_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/ai_companion"
@@ -34,8 +34,16 @@ class Settings(BaseSettings):
     # Memory Configuration
     short_term_memory_size: int = 10
     long_term_memory_top_k: int = 5
-    memory_similarity_threshold: float = 0.7
+    memory_similarity_threshold: float = 0.2  # Lowered for better recall (embedding similarities are typically low)
     memory_extraction_min_turns: int = 3
+    memory_extraction_method: str = "hybrid"  # Options: "llm", "heuristic", "hybrid"
+    
+    # AI Detection Methods (AI Chaining)
+    emotion_detection_method: str = "hybrid"  # Options: "llm", "pattern", "hybrid"
+    goal_detection_method: str = "hybrid"  # Options: "llm", "pattern", "hybrid"
+    personality_detection_method: str = "hybrid"  # Options: "llm", "pattern", "hybrid"
+    memory_categorization_method: str = "hybrid"  # Options: "llm", "pattern", "hybrid"
+    contradiction_detection_method: str = "hybrid"  # Options: "llm", "pattern", "hybrid"
     
     # System Configuration
     system_persona: str = "a helpful, knowledgeable AI assistant with memory of past conversations"

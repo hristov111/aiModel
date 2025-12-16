@@ -17,14 +17,16 @@ logger = logging.getLogger(__name__)
 class PersonalityService:
     """Manages AI personality configuration and relationship evolution."""
     
-    def __init__(self, db_session: AsyncSession):
+    def __init__(self, db_session: AsyncSession, llm_client=None):
         """
         Initialize personality service.
         
         Args:
             db_session: Database session
+            llm_client: Optional LLM client for AI-based personality detection
         """
         self.db = db_session
+        self.llm_client = llm_client
     
     async def get_personality(self, user_id: UUID) -> Optional[Dict[str, Any]]:
         """

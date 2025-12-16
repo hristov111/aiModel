@@ -83,7 +83,8 @@ async def chat_endpoint(
             async for event in chat_service.stream_chat(
                 user_message=chat_request.message,
                 conversation_id=chat_request.conversation_id,
-                user_id=user_id
+                user_id=user_id,
+                db_session=db
             ):
                 # Event is already a dictionary with type, data, etc.
                 # Send as SSE
@@ -543,7 +544,8 @@ async def get_personality(
 async def create_personality(
     request: CreatePersonalityRequest,
     user_id: str = Depends(get_current_user_id),
-    personality_service: PersonalityService = Depends(get_personality_service)
+    personality_service: PersonalityService = Depends(get_personality_service),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Create AI personality configuration.
@@ -575,6 +577,13 @@ async def create_personality(
     ```
     """
     try:
+        # Get database UUID for user
+        from app.core.auth import get_user_db_id
+        user_db_id = await get_user_db_id(db, user_id)
+        
+        if not user_db_id:
+            raise HTTPException(status_code=404, detail="User not found")
+        
         # Convert request to service format
         traits_dict = request.traits.dict(exclude_none=True) if request.traits else None
         behaviors_dict = request.behaviors.dict(exclude_none=True) if request.behaviors else None
@@ -585,7 +594,7 @@ async def create_personality(
             custom_dict['relationship_type'] = request.relationship_type
         
         personality = await personality_service.create_personality(
-            user_id=UUID(user_id),
+            user_id=user_db_id,
             archetype=request.archetype,
             traits=traits_dict,
             behaviors=behaviors_dict,

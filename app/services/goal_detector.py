@@ -1,9 +1,12 @@
-"""Goal detection from natural language."""
+"""Goal detection from natural language with AI chaining."""
 
 import re
+import json
 import logging
 from typing import Dict, Optional, List, Tuple
 from datetime import datetime, timedelta
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -12,13 +15,30 @@ class GoalDetector:
     """
     Detects goals and goal-related mentions from user messages.
     
+    Supports multiple detection methods:
+    - Pattern-based (regex matching)
+    - LLM-based (AI chaining for intelligent detection)
+    - Hybrid (LLM with pattern fallback)
+    
     Can identify:
-    - New goal declarations
+    - New goal declarations (explicit and implicit)
     - Progress updates
     - Obstacles/setbacks
     - Completions
     - Goal mentions
     """
+    
+    def __init__(self, llm_client=None, method: str = None):
+        """
+        Initialize goal detector.
+        
+        Args:
+            llm_client: Optional LLM client for AI-based detection
+            method: Detection method ("llm", "pattern", "hybrid"). Defaults to config setting.
+        """
+        self.llm_client = llm_client
+        self.method = method or settings.goal_detection_method.lower()
+        logger.info(f"GoalDetector initialized with method: {self.method}")
     
     # Goal declaration patterns
     GOAL_PATTERNS = {
@@ -165,18 +185,45 @@ class GoalDetector:
         ]
     }
     
-    def detect_goal(self, message: str) -> Optional[Dict]:
+    async def detect_goal(self, message: str, context: Optional[List[str]] = None) -> Optional[Dict]:
         """
-        Detect if message contains a new goal declaration.
+        Detect if message contains a new goal declaration using configured method.
+        
+        Args:
+            message: User message
+            context: Optional list of previous messages for context
         
         Returns:
             {
                 'title': 'Learn Spanish',
                 'category': 'learning',
                 'confidence': 0.85,
+                'commitment_level': 0.9,
                 'target_date': '2025-12-31',
                 'motivation': 'for my trip to Spain'
             }
+        """
+        # Choose detection method
+        if self.method == "llm":
+            return await self._detect_goal_with_llm(message, context)
+        elif self.method == "pattern":
+            return self._detect_goal_with_patterns(message)
+        else:  # hybrid (default)
+            # Try LLM first
+            llm_result = await self._detect_goal_with_llm(message, context)
+            if llm_result and llm_result.get('confidence', 0) >= 0.6:
+                logger.debug(f"Using LLM goal detection (confidence: {llm_result['confidence']:.2f})")
+                return llm_result
+            # Fallback to patterns
+            logger.debug("LLM goal detection low confidence or failed, falling back to pattern matching")
+            return self._detect_goal_with_patterns(message)
+    
+    def _detect_goal_with_patterns(self, message: str) -> Optional[Dict]:
+        """
+        Detect goal using pattern matching (original method).
+        
+        Returns:
+            Goal dict or None
         """
         message_lower = message.lower()
         
@@ -209,9 +256,119 @@ class GoalDetector:
             'title': title,
             'category': category,
             'confidence': confidence,
+            'commitment_level': confidence,  # Use confidence as commitment for patterns
             'target_date': target_date,
             'raw_message': message
         }
+    
+    async def _detect_goal_with_llm(self, message: str, context: Optional[List[str]] = None) -> Optional[Dict]:
+        """
+        Detect goal using LLM (AI chaining for intelligent detection).
+        
+        Args:
+            message: User message
+            context: Optional list of previous messages
+            
+        Returns:
+            Goal dict or None
+        """
+        if not self.llm_client:
+            logger.debug("LLM client not available for goal detection")
+            return None
+        
+        # Build context string
+        context_str = ""
+        if context and len(context) > 0:
+            context_str = "\nPrevious messages:\n" + "\n".join(f"- {msg}" for msg in context[-3:])
+        
+        prompt = f"""Analyze if this message contains a goal, aspiration, or intention.
+
+Current message: "{message}"{context_str}
+
+Identify:
+1. Is this a goal/aspiration/intention? (explicit or implicit)
+2. What is the goal?
+3. How committed is the user? (0.0-1.0)
+4. What category does it belong to?
+5. Any target timeframe?
+6. Any motivation mentioned?
+
+Consider:
+- Explicit goals: "I want to learn Spanish", "My goal is to..."
+- Implicit goals: "I should probably exercise more", "I've been thinking about..."
+- Commitment level: Serious intention vs casual mention
+- Context from previous messages
+
+Categories:
+learning, health, career, financial, personal, creative, social
+
+Return ONLY valid JSON:
+{{
+  "is_goal": true,
+  "title": "brief, clear goal statement",
+  "category": "learning",
+  "confidence": 0.0-1.0,
+  "commitment_level": 0.0-1.0,
+  "target_timeframe": "short-term|medium-term|long-term|none",
+  "target_date": "YYYY-MM-DD or null",
+  "motivation": "why they want this or null",
+  "reasoning": "why this is/isn't a goal"
+}}
+
+If NOT a goal, return: {{"is_goal": false, "confidence": 0.0}}
+
+JSON:"""
+        
+        try:
+            response = await self.llm_client.chat([
+                {"role": "system", "content": "You are a goal detection expert. Output only valid JSON."},
+                {"role": "user", "content": prompt}
+            ])
+            
+            # Parse JSON response
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            if not json_match:
+                logger.warning("No JSON found in LLM goal response")
+                return None
+            
+            result = json.loads(json_match.group())
+            
+            # Validate result
+            if not result.get('is_goal') or result.get('confidence', 0) < 0.3:
+                return None
+            
+            title = result.get('title', '').strip()
+            if not title or len(title) < 3:
+                logger.warning("LLM returned invalid goal title")
+                return None
+            
+            category = result.get('category', 'personal').lower()
+            confidence = float(result.get('confidence', 0.5))
+            commitment_level = float(result.get('commitment_level', confidence))
+            
+            logger.info(
+                f"LLM detected goal: '{title}' (category: {category}, "
+                f"confidence: {confidence:.2f}, commitment: {commitment_level:.2f})"
+            )
+            
+            return {
+                'title': title,
+                'category': category,
+                'confidence': min(confidence, 1.0),
+                'commitment_level': min(commitment_level, 1.0),
+                'target_date': result.get('target_date'),
+                'motivation': result.get('motivation'),
+                'target_timeframe': result.get('target_timeframe', 'none'),
+                'raw_message': message,
+                'detection_method': 'llm'
+            }
+            
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse LLM goal JSON: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"LLM goal detection failed: {e}")
+            return None
     
     def detect_progress_mention(
         self,

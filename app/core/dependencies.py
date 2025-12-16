@@ -42,10 +42,11 @@ def get_prompt_builder_dep() -> PromptBuilder:
 
 # Database-dependent services
 def get_vector_store(
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    llm_client: LLMClient = Depends(get_llm_client_dep)
 ) -> VectorStoreRepository:
     """Get vector store repository dependency."""
-    return VectorStoreRepository(db)
+    return VectorStoreRepository(db, llm_client=llm_client)
 
 
 def get_long_term_memory(
@@ -69,25 +70,28 @@ def get_preference_service(
 
 
 def get_emotion_service(
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    llm_client: LLMClient = Depends(get_llm_client_dep)
 ) -> EmotionService:
     """Get emotion service dependency."""
-    return EmotionService(db)
+    return EmotionService(db, llm_client=llm_client)
 
 
 def get_personality_service(
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    llm_client: LLMClient = Depends(get_llm_client_dep)
 ) -> PersonalityService:
     """Get personality service dependency."""
-    return PersonalityService(db)
+    return PersonalityService(db, llm_client=llm_client)
 
 
 def get_goal_service(
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    llm_client: LLMClient = Depends(get_llm_client_dep)
 ):
     """Get goal service dependency."""
     from app.services.goal_service import GoalService
-    return GoalService(db)
+    return GoalService(db, llm_client=llm_client)
 
 
 def get_chat_service(

@@ -388,11 +388,25 @@ class ChatApp {
                 info.icon = '🚀';
                 info.title = 'Starting Processing';
                 break;
-                
-            case 'emotion_detected':
-                info.icon = '😊';
-                info.title = 'Emotion Detected';
-                info.details = `${data.emotion} (confidence: ${(data.confidence * 100).toFixed(0)}%, intensity: ${data.intensity})`;
+            
+            case 'message_stored':
+                info.icon = '💾';
+                info.title = 'Message Stored';
+                break;
+            
+            case 'checking_preferences':
+                info.icon = '🔍';
+                info.title = 'Analyzing Preferences';
+                break;
+            
+            case 'preferences_updated':
+                info.icon = '✅';
+                info.title = 'Preferences Analyzed';
+                break;
+            
+            case 'checking_personality':
+                info.icon = '🔍';
+                info.title = 'Checking Personality Config';
                 break;
                 
             case 'personality_detected':
@@ -400,6 +414,13 @@ class ChatApp {
                 info.title = 'Personality Updated';
                 if (data.archetype) {
                     info.details = `Archetype: ${data.archetype}`;
+                }
+                if (data.traits && Object.keys(data.traits).length > 0) {
+                    const traitsList = Object.entries(data.traits)
+                        .map(([k, v]) => `${k}: ${v}/10`)
+                        .slice(0, 3)
+                        .join(', ');
+                    info.data = traitsList;
                 }
                 break;
                 
@@ -412,20 +433,48 @@ class ChatApp {
                 if (data.traits && Object.keys(data.traits).length > 0) {
                     const traitsList = Object.entries(data.traits)
                         .map(([k, v]) => `${k}: ${v}/10`)
+                        .slice(0, 3)
                         .join(', ');
                     info.data = traitsList;
                 }
+                break;
+            
+            case 'analyzing_emotion':
+                info.icon = '🔍';
+                info.title = 'Analyzing Emotion';
+                break;
+                
+            case 'emotion_detected':
+                info.icon = '😊';
+                info.title = 'Emotion Detected';
+                info.details = `${data.emotion} (confidence: ${(data.confidence * 100).toFixed(0)}%, intensity: ${data.intensity})`;
+                break;
+            
+            case 'analyzing_goals':
+                info.icon = '🔍';
+                info.title = 'Analyzing Goals';
                 break;
                 
             case 'goals_tracked':
                 info.icon = '🎯';
                 info.title = 'Goals Tracked';
                 info.details = `${data.active_count} active goals`;
+                if (data.new_goals > 0) {
+                    info.details += `, ${data.new_goals} new`;
+                }
+                if (data.progress_updates > 0) {
+                    info.details += `, ${data.progress_updates} updated`;
+                }
                 if (data.goals && data.goals.length > 0) {
                     info.data = data.goals
                         .map(g => `${g.title} (${g.category}): ${g.progress.toFixed(0)}%`)
                         .join('\n');
                 }
+                break;
+            
+            case 'retrieving_memories':
+                info.icon = '🔍';
+                info.title = 'Searching Memories';
                 break;
                 
             case 'memories_retrieved':
@@ -434,25 +483,56 @@ class ChatApp {
                 info.details = `Found ${data.count} relevant memories`;
                 if (data.memories && data.memories.length > 0) {
                     info.data = data.memories
-                        .map(m => `[${m.importance.toFixed(2)}] ${m.content}`)
+                        .map(m => {
+                            const type = m.type ? `[${m.type}]` : '';
+                            const importance = m.importance ? `[${m.importance.toFixed(2)}]` : '';
+                            return `${type}${importance} ${m.content}`;
+                        })
                         .join('\n\n');
+                }
+                break;
+            
+            case 'building_context':
+                info.icon = '🔧';
+                info.title = 'Building Context';
+                if (data.message_count) {
+                    info.details = `Assembling ${data.message_count} messages`;
                 }
                 break;
                 
             case 'prompt_built':
                 info.icon = '📝';
                 info.title = 'Context Assembled';
-                const features = [];
-                if (data.has_preferences) features.push('preferences');
-                if (data.has_personality) features.push('personality');
-                if (data.has_emotion) features.push('emotion');
-                info.details = `Using ${data.context_messages} messages` + 
-                    (features.length > 0 ? ` with ${features.join(', ')}` : '');
+                if (data.context) {
+                    const ctx = data.context;
+                    const parts = [];
+                    if (ctx.memories > 0) parts.push(`${ctx.memories} memories`);
+                    if (ctx.messages > 0) parts.push(`${ctx.messages} messages`);
+                    if (ctx.personality) parts.push(`${ctx.personality} personality`);
+                    if (ctx.emotion) parts.push(`${ctx.emotion} emotion`);
+                    if (ctx.goals > 0) parts.push(`${ctx.goals} goals`);
+                    if (ctx.preferences) parts.push('preferences');
+                    info.details = parts.join(', ');
+                } else {
+                    // Fallback for old format
+                    const features = [];
+                    if (data.has_preferences) features.push('preferences');
+                    if (data.has_personality) features.push('personality');
+                    if (data.has_emotion) features.push('emotion');
+                    info.details = `Using ${data.context_messages} messages` + 
+                        (features.length > 0 ? ` with ${features.join(', ')}` : '');
+                }
                 break;
                 
             case 'generating_response':
                 info.icon = '⚡';
                 info.title = 'Generating Response';
+                break;
+            
+            case 'extracting_memories':
+                info.icon = '💾';
+                info.title = 'Extracting Memories';
+                info.details = 'Background task running...';
                 break;
                 
             default:

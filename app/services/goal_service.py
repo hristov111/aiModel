@@ -19,15 +19,16 @@ class GoalService:
     Manages user goals, tracks progress, and provides insights.
     """
     
-    def __init__(self, db_session: AsyncSession):
+    def __init__(self, db_session: AsyncSession, llm_client=None):
         """
         Initialize goal service.
         
         Args:
             db_session: Database session
+            llm_client: Optional LLM client for AI-based goal detection
         """
         self.db = db_session
-        self.detector = GoalDetector()
+        self.detector = GoalDetector(llm_client=llm_client)
     
     async def create_goal(
         self,
