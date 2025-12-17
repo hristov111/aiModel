@@ -27,23 +27,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
-COPY --from=builder /root/.cache /root/.cache
+# Create non-root user for security
+RUN useradd -m -u 1000 appuser
 
-# Add local pip packages to PATH
-ENV PATH=/root/.local/bin:$PATH
+# Copy Python packages from builder to appuser's directory
+COPY --from=builder /root/.local /home/appuser/.local
+COPY --from=builder /root/.cache /home/appuser/.cache
 
 # Copy application code
 COPY app/ /app/app/
 COPY alembic.ini /app/
 COPY migrations/ /app/migrations/
+COPY frontend/ /app/frontend/
 
-# Create non-root user for security
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app
+# Set ownership
+RUN chown -R appuser:appuser /app /home/appuser/.local /home/appuser/.cache
 
+# Switch to non-root user
 USER appuser
+
+# Add local pip packages to PATH
+ENV PATH=/home/appuser/.local/bin:$PATH
 
 # Expose port
 EXPOSE 8000

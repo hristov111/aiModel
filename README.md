@@ -447,6 +447,37 @@ If experiencing memory growth:
    ```
 3. Consider using Redis for production short-term memory
 
+## 🌐 Public Access & Deployment
+
+### Quick Start: Expose Your Service Publicly
+
+Want to access your LLM from another network with password authentication?
+
+**⚡ Quick Test (5 minutes):**
+```bash
+# Terminal 1: Start service
+python app/main.py
+
+# Terminal 2: Expose publicly
+ngrok http 8000
+```
+
+**🏭 Production Setup (30 minutes):**
+```bash
+./setup_public_access.sh
+```
+
+**📚 Complete Guides:**
+- **[EXPOSE_PUBLIC_SUMMARY.md](EXPOSE_PUBLIC_SUMMARY.md)** - Decision tree & quick overview
+- **[PUBLIC_ACCESS_GUIDE.md](PUBLIC_ACCESS_GUIDE.md)** - Complete setup guide (ngrok, VPS, Docker)
+- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - One-page command reference
+- **[PRODUCTION_DEPLOYMENT_GUIDE.md](PRODUCTION_DEPLOYMENT_GUIDE.md)** - Full production deployment
+
+### Included Tools:
+- `setup_public_access.sh` - Automated setup script
+- `generate_token.py` - Generate JWT tokens and API keys
+- `test_public_api.py` - Test your public endpoint
+
 ## Production Deployment
 
 ### Recommendations

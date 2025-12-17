@@ -29,8 +29,8 @@ services:
       # Database
       POSTGRES_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_companion
       
-      # LM Studio (assumes running on host)
-      LM_STUDIO_BASE_URL: ${LM_STUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      # LM Studio (via VPS nginx proxy - Computer A tunnels to VPS:1234)
+      LM_STUDIO_BASE_URL: ${LM_STUDIO_BASE_URL:-http://66.42.93.128/llm/v1}
       LM_STUDIO_MODEL_NAME: ${LM_STUDIO_MODEL_NAME:-local-model}
       
       # Memory configuration

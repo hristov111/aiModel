@@ -130,10 +130,11 @@ if frontend_dir.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
     logger.info(f"Mounted frontend static files from {frontend_dir}")
     
-    # Serve chat.html at /chat
+    # Serve chat.html at /ui (avoiding conflict with POST /chat API endpoint)
     from fastapi.responses import FileResponse
     
-    @app.get("/chat")
+    @app.get("/ui")
+    @app.get("/")
     async def serve_chat():
         """Serve the chat frontend interface."""
         return FileResponse(str(frontend_dir / "chat.html"))

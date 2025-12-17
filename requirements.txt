@@ -37,3 +37,13 @@ redis[hiredis]==5.0.1
 python-multipart==0.0.6
 httpx==0.26.0
 
+
+# ... existing requirements ...
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+
+# Health checks (for Docker)
+requests==2.31.0
+
