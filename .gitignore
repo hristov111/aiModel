@@ -50,9 +50,17 @@ htmlcov/
 *.db
 *.sqlite
 
-# Model Cache
-models/
+# Downloaded ML Models & Cache (NOT Python code in app/models/)
 .cache/
+**/huggingface/
+**/sentence-transformers/
+*.gguf
+*.bin
+*.safetensors
+*.pth
+*.pt
+models/downloaded/
+models/pretrained/
 
 # OS
 .DS_Store
