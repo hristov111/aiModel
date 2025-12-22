@@ -99,6 +99,7 @@ class PromptBuilder:
         prompt_parts.append("- Keep responses concise and natural (typically 2-4 sentences)")
         prompt_parts.append("- Be helpful and conversational")
         prompt_parts.append("- DO NOT start every response with greetings like 'Hey', 'Hi', or 'Hello' - only greet at the beginning of a new conversation. Continue naturally without repeated greetings.")
+        prompt_parts.append("- ALWAYS respond in English, regardless of country names or foreign words mentioned in the conversation. Do NOT switch languages unless explicitly asked.")
         prompt_parts.append("- Reference relevant memories naturally when appropriate")
         prompt_parts.append("- Remember context from this conversation")
         prompt_parts.append("- If you don't know something, be honest about it")

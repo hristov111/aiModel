@@ -95,6 +95,11 @@ class MemoryExtractor:
                 logger.debug("No facts extracted from messages")
                 return 0
             
+            # 🔍 LOG: Show extracted facts
+            logger.info(f"📝 MEMORY EXTRACTION: Extracted {len(facts)} facts from conversation")
+            for idx, fact in enumerate(facts, 1):
+                logger.info(f"  └─ Fact {idx}: '{fact}'")
+            
             # Generate embeddings in batch
             contents = [fact['content'] for fact in facts]
             embeddings = self.embedding_generator.batch_generate_embeddings(contents)
@@ -146,9 +151,9 @@ class MemoryExtractor:
         
         # Patterns that suggest important information worth storing
         important_patterns = [
-            r"i (like|love|prefer|enjoy|hate|dislike)",
+            r"i (don't|dont|do not|really|actually)?\s?(like|love|prefer|enjoy|hate|dislike)",
             r"my (favorite|name)",
-            r"i'm (interested in|into)",
+            r"i'm (interested in|into|not interested in)",
             r"i (work|study|live) (at|in)",
             r"i am (a|an) (\w+)",
             r"i have (a|an|\d+)",
@@ -161,6 +166,19 @@ class MemoryExtractor:
                 continue
             
             content_lower = message.content.lower()
+            content_stripped = message.content.strip()
+            
+            # Skip questions - they're not facts to remember
+            is_question = (
+                content_stripped.endswith('?') or
+                re.match(r'^(do|does|did|is|are|was|were|can|could|will|would|should|what|when|where|why|how|who)\s', content_lower) or
+                re.search(r'\b(do you know|can you tell me|what is|what are|what do)\b', content_lower)
+            )
+            
+            if is_question:
+                logger.debug(f"Skipping question: '{content_stripped[:50]}...'")
+                continue
+            
             should_store = False
             
             # Check if message matches important patterns
@@ -265,10 +283,12 @@ Consider storing:
 
 IGNORE and do NOT store:
 - Generic responses ("ok", "thanks", "lol", "yes", "no")
-- Questions to the AI
+- Questions to the AI (anything ending with ?, starting with "do", "can", "what", "how", etc.)
+- Questions about what the AI knows or remembers ("do I like X?", "what's my name?", "do you remember?")
 - Temporary conversational context
 - Politeness phrases
 - Commands or instructions to the AI
+- Requests for information without providing new information
 
 Importance scoring guide:
 - 0.9-1.0: Critical personal info (health, family, core values)

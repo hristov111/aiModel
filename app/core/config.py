@@ -12,11 +12,15 @@ logger = logging.getLogger(__name__)
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
-    # LM Studio Configuration
+
+
+    
+        # LM Studio Configuration
     lm_studio_base_url: str = "http://localhost:1234/v1"
     lm_studio_model_name: str = "local-model"
     lm_studio_temperature: float = 0.7
     lm_studio_max_tokens: int = 150  # Shorter responses for faster generation
+    vps_api_key: str = ""  # API key for VPS LLM authorization (set in .env)
     
     # Database Configuration
     postgres_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/ai_companion"
@@ -34,7 +38,7 @@ class Settings(BaseSettings):
     # Memory Configuration
     short_term_memory_size: int = 10
     long_term_memory_top_k: int = 5
-    memory_similarity_threshold: float = 0.2  # Lowered for better recall (embedding similarities are typically low)
+    memory_similarity_threshold: float = 0.15  # Low threshold for better recall, especially for questions
     memory_extraction_min_turns: int = 3
     memory_extraction_method: str = "hybrid"  # Options: "llm", "heuristic", "hybrid"
     

@@ -15,6 +15,9 @@ LM_STUDIO_MODEL_NAME=local-model
 LM_STUDIO_TEMPERATURE=0.7
 LM_STUDIO_MAX_TOKENS=2000
 
+# VPS API Authorization (if using remote LLM server)
+VPS_API_KEY=your-secret-api-key-here
+
 # ============================================
 # Database Configuration
 # ============================================

@@ -322,8 +322,9 @@ class VectorStoreRepository:
                         MemoryModel.memory_type == new_memory.memory_type,
                         MemoryModel.is_active == True,
                         MemoryModel.id != new_memory.id,
-                        # Check memories with high similarity (same topic)
-                        (1 - MemoryModel.embedding.cosine_distance(new_memory.embedding)) >= 0.7
+                        # Check memories with moderate similarity (catches contradictions)
+                        # Lower threshold (0.4) to catch opposite sentiments about same topic
+                        (1 - MemoryModel.embedding.cosine_distance(new_memory.embedding)) >= 0.4
                     )
                 )
                 .order_by((1 - MemoryModel.embedding.cosine_distance(new_memory.embedding)).desc())
@@ -333,11 +334,18 @@ class VectorStoreRepository:
             result = await self.session.execute(stmt)
             similar_memories = result.all()
             
+            # 🔍 LOG: Show similar memories found
+            logger.info(f"🔍 CONTRADICTION CHECK: Found {len(similar_memories)} similar memories for '{new_memory.content}'")
+            for mem, sim in similar_memories:
+                logger.info(f"  └─ Similar memory (sim={sim:.2f}): '{mem.content}'")
+            
             if not similar_memories:
+                logger.info(f"✅ No similar memories found - no contradiction risk")
                 return
             
             # Check each similar memory for contradictions
             for old_memory_model, similarity in similar_memories:
+                logger.info(f"🤔 Checking if contradictory: Old='{old_memory_model.content}' vs New='{new_memory.content}'")
                 is_contradictory = await self._is_contradictory(
                     old_memory_model.content,
                     new_memory.content
@@ -345,20 +353,24 @@ class VectorStoreRepository:
                 
                 if is_contradictory:
                     logger.info(
-                        f"Detected contradiction! Old: '{old_memory_model.content}' "
+                        f"⚠️  CONTRADICTION DETECTED! "
+                        f"Old: '{old_memory_model.content}' "
                         f"New: '{new_memory.content}' (similarity: {similarity:.2f})"
                     )
+                else:
+                    logger.info(f"✅ Not contradictory - memories can coexist")
                     
                     # Determine which is newer
                     if new_memory.created_at > old_memory_model.created_at:
                         # New memory supersedes old one
                         logger.info(
-                            f"Superseding old memory {old_memory_model.id} with "
-                            f"new memory {new_memory.id}"
+                            f"🔄 SUPERSEDING: Old memory {old_memory_model.id} '{old_memory_model.content}' "
+                            f"→ Replaced by new memory {new_memory.id} '{new_memory.content}'"
                         )
                         old_memory_model.is_active = False
                         old_memory_model.superseded_by = new_memory.id
                         old_memory_model.updated_at = datetime.utcnow()
+                        logger.info(f"✅ Old memory marked as inactive (superseded)")
                     else:
                         # Old memory is newer (shouldn't happen but handle it)
                         logger.info(
@@ -428,28 +440,36 @@ class VectorStoreRepository:
         
         import json
         import re
-        
+        logger.info(f"LLM contradiction detection: {content1} and {content2}")
         prompt = f"""Analyze if these two statements contradict each other.
 
 Statement 1: "{content1}"
 Statement 2: "{content2}"
 
-Consider:
-1. Opposite sentiments about the same topic (like vs hate, enjoy vs dislike)
-2. Conflicting facts about the same subject
-3. Semantic meaning, not just keywords
-4. Temporal context (past vs present statements may not contradict)
-5. Specificity (specific cases may not contradict general statements)
+CRITICAL RULES:
+1. If both statements express CURRENT feelings/facts with opposite sentiments → CONTRADICTS
+2. "anymore", "now", "currently" indicate PRESENT state, not past
+3. "I like X" vs "I don't like X anymore" → CONTRADICTS (both about current state)
+4. "I used to like X" vs "I don't like X" → NO CONTRADICTION (both agree on current state)
 
-Examples of contradictions:
-- "I like chocolate" vs "I don't like chocolate" → CONTRADICTS
-- "I work at Google" vs "I work at Microsoft" → CONTRADICTS
-- "I'm vegan" vs "I love eating steak" → CONTRADICTS
+Consider:
+- Opposite sentiments about the same topic (like vs hate, enjoy vs dislike)
+- Conflicting facts about the same subject
+- Semantic meaning, not just keywords
+- Temporal markers: "anymore" = present, "used to" = past
+- Specificity (specific cases may not contradict general statements)
+
+Examples of CONTRADICTIONS:
+✅ "I like chocolate" vs "I don't like chocolate" → CONTRADICTS
+✅ "I enjoy chocolate" vs "I don't like chocolate anymore" → CONTRADICTS (both present state)
+✅ "I work at Google" vs "I work at Microsoft" → CONTRADICTS
+✅ "I'm vegan" vs "I love eating steak" → CONTRADICTS
+✅ "I love coffee" vs "I hate coffee now" → CONTRADICTS
 
 Examples of NON-contradictions:
-- "I used to like chocolate" vs "I don't like chocolate" → Same meaning
-- "I like chocolate" vs "I don't like dark chocolate" → Specific vs general
-- "I went to Paris" vs "I went to London" → Different events
+❌ "I used to like chocolate" vs "I don't like chocolate" → Same meaning (both = don't like NOW)
+❌ "I like chocolate" vs "I don't like dark chocolate" → Specific vs general
+❌ "I went to Paris" vs "I went to London" → Different events
 
 Return ONLY valid JSON:
 {{
@@ -461,6 +481,7 @@ Return ONLY valid JSON:
 JSON:"""
         
         try:
+            logger.info(f"LLM contradiction detection: {prompt}")
             response = await self.llm_client.chat([
                 {"role": "system", "content": "You are a semantic contradiction detection expert. Output only valid JSON."},
                 {"role": "user", "content": prompt}
@@ -471,7 +492,7 @@ JSON:"""
             if not json_match:
                 logger.warning("No JSON found in LLM contradiction response")
                 return None
-            
+            logger.info(f"LLM contradiction response: {response}")
             result = json.loads(json_match.group())
             
             # Validate result

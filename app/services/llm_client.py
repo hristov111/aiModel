@@ -68,15 +68,30 @@ class LMStudioClient(LLMClient):
         self.temperature = temperature or settings.lm_studio_temperature
         self.max_tokens = max_tokens or settings.lm_studio_max_tokens
         
-        # Create OpenAI client pointing to LM Studio
+        # Get API key from settings (for VPS authorization)
+        api_key = settings.vps_api_key or "not-needed"
+        
+        # Prepare default headers with X-API-Key for VPS
+        default_headers = {}
+        if settings.vps_api_key:
+            default_headers["X-API-Key"] = settings.vps_api_key
+            logger.info(f"VPS API Key configured - will send X-API-Key header")
+        
+        # Create OpenAI client pointing to LM Studio/VPS
         self.client = AsyncOpenAI(
             base_url=self.base_url,
-            api_key="not-needed",  # LM Studio doesn't require API key
+            api_key="not-needed",  # Not used for auth, we use X-API-Key header
+            default_headers=default_headers,  # Custom header for VPS
             timeout=httpx.Timeout(timeout, connect=5.0),
             max_retries=2,
         )
         
-        logger.info(f"Initialized LM Studio client: {self.base_url}")
+        # Log initialization (mask API key for security)
+        if settings.vps_api_key:
+            masked_key = settings.vps_api_key[:8] + "..." if len(settings.vps_api_key) > 8 else "***"
+            logger.info(f"Initialized LM Studio client: {self.base_url} (X-API-Key: {masked_key})")
+        else:
+            logger.info(f"Initialized LM Studio client: {self.base_url} (no auth)")
     
     async def stream_chat(self, messages: List[Dict[str, str]]) -> AsyncIterator[str]:
         """

@@ -16,6 +16,8 @@ from app.services.emotion_service import EmotionService
 from app.services.personality_service import PersonalityService
 from app.services.personality_detector import PersonalityDetector
 from app.core.exceptions import LLMConnectionError, LLMResponseError
+from app.core.config import settings
+from app.utils.journey_logger import JourneyLogger
 
 logger = logging.getLogger(__name__)
 
@@ -79,21 +81,29 @@ class ChatService:
             - {"type": "chunk", "chunk": "...", "conversation_id": "..."}
             - {"type": "done", "conversation_id": "..."}
         """
+        # Create journey logger for detailed tracking
+        request_id = str(uuid4())
+        journey = JourneyLogger(request_id, user_id or "anonymous")
+        journey.log_start(user_message)
+        
         # Create conversation ID if not provided
         if conversation_id is None:
             conversation_id = uuid4()
             logger.info(f"Created new conversation: {conversation_id} for user: {user_id}")
+            journey.log_conversation_created(str(conversation_id))
         
-        # Try to get database UUID for user (if they're registered)
+        # Try to get or create database UUID for user
         user_db_id = None
         if user_id and db_session:
             try:
-                from app.core.auth import get_user_db_id
-                user_db_id = await get_user_db_id(db_session, user_id)
+                from app.core.auth import get_or_create_user_db_id
+                user_db_id = await get_or_create_user_db_id(db_session, user_id, auto_create=True)
                 if user_db_id:
                     logger.info(f"Resolved user {user_id} to database UUID: {user_db_id}")
+                    journey.log_user_resolved(str(user_db_id))
             except Exception as e:
-                logger.debug(f"Could not resolve user DB ID: {e}")
+                logger.debug(f"Could not resolve/create user DB ID: {e}")
+                journey.log_step("USER_RESOLUTION_FAILED", "Could not resolve/create user DB ID", level="DEBUG")
         
         # Create conversation record in database if user is registered
         if user_db_id and db_session:
@@ -147,7 +157,9 @@ class ChatService:
             
             # Step 2: Auto-detect and update preferences if present
             preferences_updated = False
-            if self.preference_service and user_id:
+            updated_prefs = None
+            if self.preference_service and user_id and user_db_id:  # Only if user exists
+                journey.log_step("PREFERENCES_CHECK", "Checking user preferences...")
                 yield {
                     "type": "thinking",
                     "step": "checking_preferences",
@@ -156,119 +168,96 @@ class ChatService:
                     "timestamp": datetime.utcnow().isoformat()
                 }
                 
-                await self.preference_service.extract_and_update_preferences(
-                    external_user_id=user_id,
-                    message_content=user_message
-                )
-                preferences_updated = True
+                try:
+                    # Extract and update preferences (returns None if no preferences detected)
+                    updated_prefs = await self.preference_service.extract_and_update_preferences(
+                        external_user_id=user_id,
+                        message_content=user_message
+                    )
+                    
+                    # Commit if preferences were actually detected and updated
+                    if updated_prefs:
+                        try:
+                            await db_session.commit()
+                            preferences_updated = True
+                            logger.info(f"Preferences updated and committed for {user_id}: {updated_prefs}")
+                        except Exception as e:
+                            logger.warning(f"Failed to commit preferences: {e}")
+                            await db_session.rollback()
+                except Exception as e:
+                    logger.warning(f"Could not update preferences for {user_id}: {e}")
                 
                 if preferences_updated:
                     yield {
                         "type": "thinking",
                         "step": "preferences_updated",
-                        "data": {"message": "Communication preferences analyzed"},
-                        "conversation_id": str(conversation_id),
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
-            
-            # Step 3: Auto-detect and update personality if mentioned
-            personality_detected = False
-            if self.personality_service and self.personality_detector and user_db_id:
-                yield {
-                    "type": "thinking",
-                    "step": "checking_personality",
-                    "data": {"message": "Checking for personality configuration..."},
-                    "conversation_id": str(conversation_id),
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-                
-                # Get recent messages for context
-                recent_messages_for_personality = self.conversation_buffer.get_recent_messages(conversation_id)
-                context_for_personality = [msg.content for msg in recent_messages_for_personality[-3:]]
-                
-                personality_config_detected = await self.personality_detector.detect(
-                    user_message,
-                    context=context_for_personality if context_for_personality else None
-                )
-                if personality_config_detected:
-                    try:
-                        await self.personality_service.update_personality(
-                            user_id=user_db_id,
-                            archetype=personality_config_detected.get('archetype'),
-                            traits=personality_config_detected.get('traits'),
-                            behaviors=personality_config_detected.get('behaviors'),
-                            custom_config={'custom_instructions': personality_config_detected.get('custom_instructions')} if personality_config_detected.get('custom_instructions') else None,
-                            merge=True
-                        )
-                        logger.info(f"Auto-updated personality for user {user_id}")
-                        personality_detected = True
-                        
-                        yield {
-                            "type": "thinking",
-                            "step": "personality_detected",
-                            "data": {
-                                "message": "Updated personality preferences",
-                                "archetype": personality_config_detected.get('archetype'),
-                                "traits": personality_config_detected.get('traits', {})
-                            },
-                            "conversation_id": str(conversation_id),
-                            "timestamp": datetime.utcnow().isoformat()
-                        }
-                    except Exception as e:
-                        logger.warning(f"Could not update personality: {e}")
-            
-            # Step 4: Get user preferences for HARD ENFORCEMENT
-            user_preferences = None
-            if self.preference_service and user_id:
-                user_preferences = await self.preference_service.get_user_preferences(user_id)
-            
-            # Step 5: Get personality configuration
-            personality_config = None
-            relationship_state = None
-            if self.personality_service and user_db_id:
-                try:
-                    personality_config = await self.personality_service.get_personality(user_db_id)
-                    relationship_state = await self.personality_service.get_relationship_state(user_db_id)
-                    # Update relationship metrics
-                    await self.personality_service.update_relationship_metrics(
-                        user_id=user_db_id,
-                        message_sent=True
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not load personality for user {user_id}: {e}")
-                
-                if personality_config:
-                    yield {
-                        "type": "thinking",
-                        "step": "personality_loaded",
                         "data": {
-                            "message": "Applied personality configuration",
-                            "archetype": personality_config.get('archetype'),
-                            "relationship_depth": relationship_state.get('relationship_depth_score', 0) if relationship_state else 0,
-                            "traits": personality_config.get('traits', {})
+                            "message": "Communication preferences updated",
+                            "preferences": updated_prefs
                         },
                         "conversation_id": str(conversation_id),
                         "timestamp": datetime.utcnow().isoformat()
                     }
             
-            # Step 6: Detect emotion from user message
-            detected_emotion = None
-            emotion_context = None
-            if self.emotion_service and user_db_id:
+            # ==========================================
+            # OPTIMIZED: PARALLEL DETECTION
+            # ==========================================
+            
+            yield {
+                "type": "thinking",
+                "step": "analyzing",
+                "data": {"message": "Analyzing message (parallel detection)..."},
+                "conversation_id": str(conversation_id),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            # Prepare context once for all detections
+            recent_messages_context = self.conversation_buffer.get_recent_messages(conversation_id)
+            context_for_detection = [msg.content for msg in recent_messages_context[-3:]]
+            
+            # ==========================================
+            # PARALLEL TASK 1: Personality Detection
+            # ==========================================
+            async def detect_personality():
+                """Detect personality preferences in parallel."""
+                if not (self.personality_service and self.personality_detector and user_db_id):
+                    logger.info(f"Personality detection failed: {self.personality_service and self.personality_detector and user_db_id}")
+                    return None
+                    
                 try:
-                    yield {
-                        "type": "thinking",
-                        "step": "analyzing_emotion",
-                        "data": {"message": "Analyzing emotional state..."},
-                        "conversation_id": str(conversation_id),
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
+                    personality_config_detected = await self.personality_detector.detect(
+                        user_message,
+                        context=context_for_detection if context_for_detection else None
+                    )
                     
-                    # Get recent messages for context
-                    recent_messages = self.conversation_buffer.get_recent_messages(conversation_id)
-                    context_messages = [msg.content for msg in recent_messages[-3:] if msg.role == "user"]
+                    if personality_config_detected:
+                        logger.info(f"Personality detection successful: {personality_config_detected}")
+                        await self.personality_service.update_personality(
+                            user_id=user_db_id,
+                            archetype=personality_config_detected.get('archetype'),
+                            traits=personality_config_detected.get('traits'),
+                            behaviors=personality_config_detected.get('behaviors'),
+                            custom_config={'custom_instructions': personality_config_detected.get('custom_instructions')} 
+                                if personality_config_detected.get('custom_instructions') else None,
+                            merge=True
+                        )
+                        logger.info(f"Auto-updated personality for user {user_id}")
+                        return personality_config_detected
+                    return None
+                except Exception as e:
+                    logger.warning(f"Personality detection failed: {e}")
+                    return None
+            
+            # ==========================================
+            # PARALLEL TASK 2: Emotion Detection
+            # ==========================================
+            async def detect_emotion():
+                """Detect emotion in parallel."""
+                if not (self.emotion_service and user_db_id):
+                    return None
                     
-                    # Detect and store emotion with context
+                try:
+                    context_messages = [msg.content for msg in recent_messages_context[-3:] if msg.role == "user"]
                     emotion = await self.emotion_service.detect_and_store(
                         user_id=user_db_id,
                         message=user_message,
@@ -277,95 +266,149 @@ class ChatService:
                     )
                     
                     if emotion:
-                        detected_emotion = {
+                        logger.info(f"Detected emotion: {emotion.emotion} ({emotion.confidence:.2f})")
+                        return {
                             'emotion': emotion.emotion,
                             'confidence': emotion.confidence,
                             'intensity': emotion.intensity
                         }
-                        logger.info(f"Detected emotion: {emotion.emotion} ({emotion.confidence:.2f})")
-                        
-                        # Emit emotion detection
-                        yield {
-                            "type": "thinking",
-                            "step": "emotion_detected",
-                            "data": {
-                                "message": f"Detected emotion: {emotion.emotion}",
-                                "emotion": emotion.emotion,
-                                "confidence": round(emotion.confidence, 2),
-                                "intensity": emotion.intensity
-                            },
-                            "conversation_id": str(conversation_id),
-                            "timestamp": datetime.utcnow().isoformat()
-                        }
-                        
-                        # Get emotion trends for context
-                        emotion_context = await self.emotion_service.get_emotion_trends(
-                            user_id=user_db_id,
-                            days=30
-                        )
+                    return None
                 except Exception as e:
-                    logger.warning(f"Could not detect emotions: {e}")
+                    logger.warning(f"Emotion detection failed: {e}")
+                    return None
             
-            # Step 6.5: Detect and track goals from user message
-            goal_context = None
-            if self.goal_service and user_db_id:
+            # ==========================================
+            # PARALLEL TASK 3: Load Personality Config
+            # ==========================================
+            async def load_personality():
+                """Load existing personality config in parallel."""
+                if not (self.personality_service and user_db_id):
+                    return None, None
+                    
                 try:
-                    yield {
-                        "type": "thinking",
-                        "step": "analyzing_goals",
-                        "data": {"message": "Checking for goals and tracking progress..."},
-                        "conversation_id": str(conversation_id),
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
+                    personality_config = await self.personality_service.get_personality(user_db_id)
+                    relationship_state = await self.personality_service.get_relationship_state(user_db_id)
                     
-                    goal_tracking_result = await self.goal_service.detect_and_track_goals(
+                    # Update relationship metrics
+                    await self.personality_service.update_relationship_metrics(
                         user_id=user_db_id,
-                        message=user_message,
-                        conversation_id=conversation_id,
-                        detected_emotion=detected_emotion.get('emotion') if detected_emotion else None
+                        message_sent=True
                     )
+                    return personality_config, relationship_state
+                except Exception as e:
+                    logger.warning(f"Could not load personality: {e}")
+                    return None, None
+            
+            # ==========================================
+            # PARALLEL TASK 4: Load User Preferences
+            # ==========================================
+            async def load_preferences():
+                """Load user preferences in parallel."""
+                if not (self.preference_service and user_id):
+                    return None
                     
-                    # Get active goals for context
-                    active_goals = await self.goal_service.get_user_goals(
+                try:
+                    return await self.preference_service.get_user_preferences(user_id)
+                except Exception as e:
+                    logger.warning(f"Could not load preferences: {e}")
+                    return None
+            
+            # ==========================================
+            # RUN ALL DETECTIONS IN PARALLEL
+            # ==========================================
+            logger.info("Running parallel detections...")
+            
+            # Execute all tasks simultaneously
+            (
+                personality_config_detected,
+                detected_emotion,
+                (personality_config, relationship_state),
+                user_preferences
+            ) = await asyncio.gather(
+                detect_personality(),
+                detect_emotion(),
+                load_personality(),
+                load_preferences(),
+                return_exceptions=True
+            )
+            
+            # Handle exceptions
+            if isinstance(personality_config_detected, Exception):
+                logger.warning(f"Personality detection error: {personality_config_detected}")
+                personality_config_detected = None
+            if isinstance(detected_emotion, Exception):
+                logger.warning(f"Emotion detection error: {detected_emotion}")
+                detected_emotion = None
+            if isinstance(personality_config, Exception) or isinstance(relationship_state, Exception):
+                logger.warning(f"Personality load error")
+                personality_config, relationship_state = None, None
+            if isinstance(user_preferences, Exception):
+                logger.warning(f"Preferences load error: {user_preferences}")
+                user_preferences = None
+            
+            logger.info("Parallel detections completed")
+            
+            # ==========================================
+            # EMIT DETECTION RESULTS
+            # ==========================================
+            
+            # Emit personality detection result
+            if personality_config_detected:
+                yield {
+                    "type": "thinking",
+                    "step": "personality_detected",
+                    "data": {
+                        "message": "Updated personality preferences",
+                        "archetype": personality_config_detected.get('archetype'),
+                        "traits": personality_config_detected.get('traits', {})
+                    },
+                    "conversation_id": str(conversation_id),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            
+            # Emit personality config
+            if personality_config:
+                yield {
+                    "type": "thinking",
+                    "step": "personality_loaded",
+                    "data": {
+                        "message": "Applied personality configuration",
+                        "archetype": personality_config.get('archetype'),
+                        "relationship_depth": relationship_state.get('relationship_depth_score', 0) if relationship_state else 0,
+                        "traits": personality_config.get('traits', {})
+                    },
+                    "conversation_id": str(conversation_id),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            
+            # Emit emotion detection result
+            if detected_emotion:
+                yield {
+                    "type": "thinking",
+                    "step": "emotion_detected",
+                    "data": {
+                        "message": f"Detected emotion: {detected_emotion['emotion']}",
+                        "emotion": detected_emotion['emotion'],
+                        "confidence": round(detected_emotion['confidence'], 2),
+                        "intensity": detected_emotion['intensity']
+                    },
+                    "conversation_id": str(conversation_id),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            
+            # Get emotion trends for context
+            emotion_context = None
+            if detected_emotion and self.emotion_service and user_db_id:
+                try:
+                    emotion_context = await self.emotion_service.get_emotion_trends(
                         user_id=user_db_id,
-                        status='active'
+                        days=30
                     )
                 except Exception as e:
-                    logger.warning(f"Could not track goals: {e}")
-                    goal_tracking_result = None
-                    active_goals = []
-                
-                if active_goals:
-                    goal_context = {
-                        'active_goals': active_goals[:5],  # Top 5 active goals
-                        'new_goals': goal_tracking_result.get('new_goals', []),
-                        'progress_updates': goal_tracking_result.get('progress_updates', []),
-                        'completions': goal_tracking_result.get('completions', [])
-                    }
-                    logger.info(f"Goal tracking: {len(active_goals)} active goals, {len(goal_tracking_result.get('new_goals', []))} new")
-                    
-                    # Emit goal tracking
-                    goal_summary = []
-                    for goal in active_goals[:3]:  # Show top 3
-                        goal_summary.append({
-                            "title": goal.get('title'),
-                            "category": goal.get('category'),
-                            "progress": goal.get('progress_percentage', 0)
-                        })
-                    
-                    yield {
-                        "type": "thinking",
-                        "step": "goals_tracked",
-                        "data": {
-                            "message": f"Tracking {len(active_goals)} active goals",
-                            "active_count": len(active_goals),
-                            "new_goals": len(goal_tracking_result.get('new_goals', [])),
-                            "progress_updates": len(goal_tracking_result.get('progress_updates', [])),
-                            "goals": goal_summary
-                        },
-                        "conversation_id": str(conversation_id),
-                        "timestamp": datetime.utcnow().isoformat()
-                    }
+                    logger.warning(f"Could not get emotion trends: {e}")
+            
+            # Note: Goal tracking moved to background (non-urgent)
+            goal_context = None
             
             # Step 7: Retrieve relevant long-term memories
             yield {
@@ -376,11 +419,13 @@ class ChatService:
                 "timestamp": datetime.utcnow().isoformat()
             }
             
+            journey.log_memory_retrieval_start(user_message)
             relevant_memories = await self.long_term_memory.retrieve_relevant_memories(
                 conversation_id=conversation_id,
                 query_text=user_message
             )
             logger.debug(f"Retrieved {len(relevant_memories)} relevant memories")
+            journey.log_memory_retrieved(len(relevant_memories), settings.long_term_memory_top_k)
             
             # Emit memory retrieval
             memory_preview = []
@@ -462,6 +507,15 @@ class ChatService:
             
             # Step 10: Stream LLM response
             logger.info(f"Streaming chat response for conversation {conversation_id}")
+            journey.log_prompt_building_start()
+            journey.log_prompt_built(
+                len(relevant_memories),
+                len(recent_messages),
+                personality_config is not None,
+                detected_emotion is not None
+            )
+            journey.log_llm_call_start(settings.lm_studio_model_name)
+            journey.log_streaming_start()
             
             # Emit generation start
             yield {
@@ -473,9 +527,12 @@ class ChatService:
             }
             
             full_response = []
+            chunk_count = 0
             
             async for chunk in self.llm_client.stream_chat(messages):
                 full_response.append(chunk)
+                chunk_count += 1
+                journey.log_streaming_chunk(chunk_count)
                 yield {
                     "type": "chunk",
                     "chunk": chunk,
@@ -490,18 +547,29 @@ class ChatService:
                 content=assistant_response
             )
             
-            # Step 12: Trigger async memory extraction (non-blocking)
+            # Step 12: Trigger comprehensive background analysis (non-blocking)
+            # This includes: goal tracking, memory extraction, and other non-urgent tasks
             yield {
                 "type": "thinking",
-                "step": "extracting_memories",
-                "data": {"message": "Extracting important memories (background task)..."},
+                "step": "background_analysis",
+                "data": {"message": "Running background analysis (goals, memories)..."},
                 "conversation_id": str(conversation_id),
                 "timestamp": datetime.utcnow().isoformat()
             }
             
+            # Start background analysis in fire-and-forget mode
             asyncio.create_task(
-                self._extract_memories_async(conversation_id)
+                self._background_analysis(
+                    user_message=user_message,
+                    user_db_id=user_db_id,
+                    conversation_id=conversation_id,
+                    detected_emotion=detected_emotion
+                )
             )
+            
+            # Log streaming completion
+            full_response_text = "".join(full_response)
+            journey.log_streaming_complete(chunk_count, len(full_response_text))
             
             # Emit done
             yield {
@@ -510,7 +578,11 @@ class ChatService:
                 "timestamp": datetime.utcnow().isoformat()
             }
             
+            # Log journey completion
+            journey.log_complete()
+            
         except (LLMConnectionError, LLMResponseError) as e:
+            journey.log_error("LLMError", str(e))
             logger.error(f"LLM error in chat: {e}")
             error_message = "I'm having trouble connecting to my language model. Please try again."
             yield {
@@ -530,6 +602,7 @@ class ChatService:
     async def _extract_memories_async(self, conversation_id: UUID) -> None:
         """
         Extract and store memories asynchronously (background task).
+        NOTE: This method is deprecated. Use _background_analysis instead.
         
         Args:
             conversation_id: Conversation identifier
@@ -547,6 +620,56 @@ class ChatService:
                 
         except Exception as e:
             logger.error(f"Error in background memory extraction: {e}")
+    
+    async def _background_analysis(
+        self,
+        user_message: str,
+        user_db_id: UUID,
+        conversation_id: UUID,
+        detected_emotion: Optional[Dict] = None
+    ) -> None:
+        """
+        Run non-urgent analysis tasks in background after response is sent.
+        
+        Args:
+            user_message: The user's message
+            user_db_id: User database UUID
+            conversation_id: Conversation identifier
+            detected_emotion: Previously detected emotion (optional)
+        """
+        try:
+            logger.info(f"Starting background analysis for conversation {conversation_id}")
+            
+            # Goal detection and tracking (non-urgent)
+            if self.goal_service:
+                try:
+                    goal_tracking_result = await self.goal_service.detect_and_track_goals(
+                        user_id=user_db_id,
+                        message=user_message,
+                        conversation_id=conversation_id,
+                        detected_emotion=detected_emotion.get('emotion') if detected_emotion else None
+                    )
+                    if goal_tracking_result:
+                        new_goals = goal_tracking_result.get('new_goals', [])
+                        progress_updates = goal_tracking_result.get('progress_updates', [])
+                        logger.info(f"Background: Tracked goals - {len(new_goals)} new, {len(progress_updates)} updates")
+                except Exception as e:
+                    logger.warning(f"Background goal tracking failed: {e}")
+            
+            # Memory extraction (non-urgent)
+            try:
+                recent_messages = self.conversation_buffer.get_recent_messages(conversation_id)
+                count = await self.long_term_memory.extract_and_store_memories(
+                    conversation_id=conversation_id,
+                    messages=recent_messages
+                )
+                if count > 0:
+                    logger.info(f"Background: Extracted {count} memories")
+            except Exception as e:
+                logger.warning(f"Background memory extraction failed: {e}")
+                
+        except Exception as e:
+            logger.error(f"Error in background analysis: {e}", exc_info=True)
     
     async def reset_conversation(self, conversation_id: UUID) -> None:
         """

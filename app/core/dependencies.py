@@ -58,15 +58,16 @@ def get_long_term_memory(
     return LongTermMemoryService(
         vector_store=vector_store,
         embedding_generator=embedding_generator,
-        llm_client=None  # Don't use LLM for extraction by default (performance)
+        llm_client=llm_client  # ✅ ENABLED: Use LLM for intelligent memory extraction
     )
 
 
 def get_preference_service(
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    llm_client: LLMClient = Depends(get_llm_client_dep)
 ) -> UserPreferenceService:
     """Get user preference service dependency."""
-    return UserPreferenceService(db)
+    return UserPreferenceService(db, llm_client=llm_client)
 
 
 def get_emotion_service(

@@ -296,6 +296,43 @@ async def get_user_db_id(
     return user_id
 
 
+async def get_or_create_user_db_id(
+    session: AsyncSession,
+    external_user_id: str,
+    auto_create: bool = True
+) -> Optional[UUID]:
+    """
+    Get database UUID for a user, creating the user if they don't exist.
+    
+    Args:
+        session: Database session
+        external_user_id: External user ID
+        auto_create: If True, create user if not found
+        
+    Returns:
+        Database UUID or None if user not found and auto_create is False
+    """
+    # First, try to get existing user
+    user_id = await get_user_db_id(session, external_user_id)
+    
+    if user_id:
+        return user_id
+    
+    # If not found and auto_create is True, create new user
+    if auto_create:
+        logger.info(f"Auto-creating new user: {external_user_id}")
+        new_user = UserModel(
+            external_user_id=external_user_id,
+            created_at=datetime.utcnow()
+        )
+        session.add(new_user)
+        await session.flush()  # Flush to get the ID without committing
+        logger.info(f"Created new user {external_user_id} with DB ID: {new_user.id}")
+        return new_user.id
+    
+    return None
+
+
 async def verify_conversation_ownership(
     session: AsyncSession,
     conversation_id,

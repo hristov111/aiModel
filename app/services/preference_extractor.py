@@ -53,7 +53,22 @@ class CommunicationPreferences:
 
 
 class PreferenceExtractor:
-    """Extracts communication preferences from user messages."""
+    """
+    Extracts communication preferences from user messages.
+    
+    Uses hybrid approach:
+    1. Try LLM-based extraction (intelligent, flexible)
+    2. Fall back to pattern matching (reliable, fast)
+    """
+    
+    def __init__(self, llm_client=None):
+        """
+        Initialize preference extractor.
+        
+        Args:
+            llm_client: Optional LLM client for AI-based extraction
+        """
+        self.llm_client = llm_client
     
     # Pattern definitions for detecting preferences
     LANGUAGE_PATTERNS = {
@@ -117,19 +132,27 @@ class PreferenceExtractor:
     }
     
     EMOJI_PATTERNS = {
-        True: [
-            r'use emojis',
-            r'add emojis',
-            r'include emojis',
-            r'with emojis',
-            r'i (like|love|prefer) emojis'
-        ],
+        # Check False (negative) patterns FIRST by putting them first in dict
         False: [
             r'no emojis',
             r'don\'t use emojis',
+            r'dont use emojis',  # Without apostrophe
+            r'do not use emojis',
+            r'please (don\'t|dont|do not) use emojis',
             r'without emojis',
             r'skip (the |)emojis',
-            r'i (don\'t like|hate|dislike) emojis'
+            r'avoid emojis',
+            r'stop using emojis',
+            r'i (don\'t like|dont like|hate|dislike) emojis'
+        ],
+        True: [
+            # Use positive lookbehind to ensure not preceded by "don't/dont/not"
+            r'(?<!don\'t )(?<!dont )(?<!not )use emojis',
+            r'(?<!don\'t )(?<!dont )add emojis',
+            r'(?<!don\'t )(?<!dont )include emojis',
+            r'with emojis',
+            r'i (like|love|prefer) emojis',
+            r'please use emojis'
         ]
     }
     
@@ -180,9 +203,40 @@ class PreferenceExtractor:
         ]
     }
     
-    def extract_from_message(self, message: str) -> CommunicationPreferences:
+    async def extract_from_message(self, message: str) -> CommunicationPreferences:
         """
-        Extract preferences from a single message.
+        Extract preferences from a single message using hybrid approach.
+        
+        Tries LLM first, falls back to patterns if LLM fails or returns low confidence.
+        
+        Args:
+            message: User message text
+            
+        Returns:
+            CommunicationPreferences with detected preferences
+        """
+        # Try LLM-based extraction first if available
+        if self.llm_client:
+            try:
+                llm_prefs = await self._extract_with_llm(message)
+                if llm_prefs and self._has_preferences(llm_prefs):
+                    logger.info(f"LLM extracted preferences: {llm_prefs.to_dict()}")
+                    return llm_prefs
+                else:
+                    logger.debug("LLM returned no preferences, falling back to patterns")
+            except Exception as e:
+                logger.warning(f"LLM preference extraction failed: {e}, falling back to patterns")
+        
+        # Fall back to pattern-based extraction
+        prefs = self._extract_with_patterns(message)
+        if self._has_preferences(prefs):
+            logger.info(f"Pattern-based extracted preferences: {prefs.to_dict()}")
+        
+        return prefs
+    
+    def _extract_with_patterns(self, message: str) -> CommunicationPreferences:
+        """
+        Extract preferences using pattern matching (fallback method).
         
         Args:
             message: User message text
@@ -201,16 +255,93 @@ class PreferenceExtractor:
         prefs.response_length = self._match_patterns(message_lower, self.LENGTH_PATTERNS)
         prefs.explanation_style = self._match_patterns(message_lower, self.EXPLANATION_PATTERNS)
         
-        # Only set timestamp if any preference was detected
-        if any([prefs.language, prefs.formality, prefs.tone, 
-                prefs.emoji_usage is not None, prefs.response_length, 
-                prefs.explanation_style]):
+        # Set timestamp if any preference was detected
+        if self._has_preferences(prefs):
             prefs.last_updated = datetime.utcnow()
-            logger.info(f"Extracted preferences from message: {prefs.to_dict()}")
         
         return prefs
     
-    def extract_from_messages(self, messages: List[Message]) -> CommunicationPreferences:
+    async def _extract_with_llm(self, message: str) -> Optional[CommunicationPreferences]:
+        """
+        Extract preferences using LLM (AI-based method).
+        
+        Args:
+            message: User message text
+            
+        Returns:
+            CommunicationPreferences or None if extraction failed
+        """
+        prompt = f"""Analyze if this message contains communication preferences for how the AI should respond.
+
+Message: "{message}"
+
+Detect these preference types:
+1. Language: English, Spanish, French, German, etc.
+2. Formality: casual, formal, professional
+3. Tone: enthusiastic, calm, neutral, friendly
+4. Emoji usage: true (use emojis) or false (don't use emojis)
+5. Response length: brief, detailed, balanced
+6. Explanation style: simple, technical, analogies
+
+Return ONLY valid JSON:
+{{
+  "language": "language name or null",
+  "formality": "casual|formal|professional or null",
+  "tone": "enthusiastic|calm|neutral|friendly or null",
+  "emoji_usage": true|false|null,
+  "response_length": "brief|detailed|balanced or null",
+  "explanation_style": "simple|technical|analogies or null",
+  "confidence": 0.0-1.0
+}}
+
+If NO preferences detected, return: {{"confidence": 0.0}}
+
+JSON:"""
+
+        try:
+            response = await self.llm_client.chat([
+                {"role": "system", "content": "You are a communication preference expert. Output only valid JSON."},
+                {"role": "user", "content": prompt}
+            ])
+            
+            # Parse JSON response
+            import json
+            result = json.loads(response)
+            
+            # Check confidence
+            confidence = result.get('confidence', 0.0)
+            if confidence < 0.5:
+                logger.debug(f"LLM preference detection low confidence: {confidence}")
+                return None
+            
+            # Build preferences object
+            prefs = CommunicationPreferences()
+            prefs.language = result.get('language')
+            prefs.formality = result.get('formality')
+            prefs.tone = result.get('tone')
+            prefs.emoji_usage = result.get('emoji_usage')
+            prefs.response_length = result.get('response_length')
+            prefs.explanation_style = result.get('explanation_style')
+            prefs.last_updated = datetime.utcnow()
+            
+            return prefs
+            
+        except Exception as e:
+            logger.warning(f"Failed to parse LLM preference response: {e}")
+            return None
+    
+    def _has_preferences(self, prefs: CommunicationPreferences) -> bool:
+        """Check if any preferences were detected."""
+        return any([
+            prefs.language,
+            prefs.formality,
+            prefs.tone,
+            prefs.emoji_usage is not None,
+            prefs.response_length,
+            prefs.explanation_style
+        ])
+    
+    async def extract_from_messages(self, messages: List[Message]) -> CommunicationPreferences:
         """
         Extract preferences from multiple messages (most recent wins).
         
@@ -227,7 +358,7 @@ class PreferenceExtractor:
             if message.role != "user":
                 continue
             
-            msg_prefs = self.extract_from_message(message.content)
+            msg_prefs = await self.extract_from_message(message.content)
             
             # Update combined preferences (non-None values override)
             if msg_prefs.language:

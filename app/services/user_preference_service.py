@@ -14,15 +14,16 @@ logger = logging.getLogger(__name__)
 class UserPreferenceService:
     """Service for managing user preferences."""
     
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, llm_client=None):
         """
         Initialize user preference service.
         
         Args:
             session: Database session
+            llm_client: Optional LLM client for AI-based preference extraction
         """
         self.session = session
-        self.extractor = PreferenceExtractor()
+        self.extractor = PreferenceExtractor(llm_client=llm_client)
     
     async def get_user_preferences(self, external_user_id: str) -> Optional[Dict]:
         """
@@ -86,7 +87,7 @@ class UserPreferenceService:
         
         # Mark as modified for SQLAlchemy
         from sqlalchemy.orm.attributes import flag_modified
-        flag_modified(user, 'metadata')
+        flag_modified(user, 'extra_metadata')
         
         await self.session.flush()
         
@@ -109,8 +110,8 @@ class UserPreferenceService:
         Returns:
             Updated preferences if any were detected, None otherwise
         """
-        # Extract preferences from message
-        detected_prefs = self.extractor.extract_from_message(message_content)
+        # Extract preferences from message (now async with LLM support)
+        detected_prefs = await self.extractor.extract_from_message(message_content)
         
         # Convert to dict
         pref_dict = detected_prefs.to_dict()
