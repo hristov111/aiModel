@@ -104,10 +104,31 @@ class MemoryExtractor:
             contents = [fact['content'] for fact in facts]
             embeddings = self.embedding_generator.batch_generate_embeddings(contents)
             
-            # Store each fact
+            # Store each fact (with deduplication)
             stored_count = 0
+            skipped_duplicates = 0
+            
             for fact, embedding in zip(facts, embeddings):
                 try:
+                    # Check for duplicate memories (similarity > 0.95 = very similar)
+                    existing_similar = await self.vector_store.search_memories(
+                        conversation_id=conversation_id,
+                        query_embedding=embedding,
+                        top_k=1,
+                        similarity_threshold=0.95  # Very high threshold for duplicates
+                    )
+                    
+                    # If very similar memory exists, skip storing
+                    if existing_similar and len(existing_similar) > 0:
+                        similar_memory = existing_similar[0]
+                        logger.debug(
+                            f"Skipping duplicate memory: '{fact['content'][:50]}...' "
+                            f"(similar to existing: '{similar_memory.content[:50]}...')"
+                        )
+                        skipped_duplicates += 1
+                        continue
+                    
+                    # Store new unique memory
                     await self.vector_store.store_memory(
                         conversation_id=conversation_id,
                         content=fact['content'],
@@ -127,7 +148,7 @@ class MemoryExtractor:
             
             logger.info(
                 f"Extracted and stored {stored_count} memories for conversation {conversation_id} "
-                f"using {extraction_method} method"
+                f"using {extraction_method} method (skipped {skipped_duplicates} duplicates)"
             )
             return stored_count
             

@@ -26,8 +26,8 @@ def get_embedding_generator_dep() -> EmbeddingGenerator:
 
 
 def get_llm_client_dep() -> LLMClient:
-    """Get LLM client dependency."""
-    return get_llm_client()
+    """Get LLM client dependency (defaults to OpenAI)."""
+    return get_llm_client(provider="openai")
 
 
 def get_conversation_buffer_dep() -> ConversationBuffer:

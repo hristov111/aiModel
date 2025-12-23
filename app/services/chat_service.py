@@ -10,11 +10,12 @@ from app.models.memory import Message
 from app.services.short_term_memory import ConversationBuffer
 from app.services.long_term_memory import LongTermMemoryService
 from app.services.prompt_builder import PromptBuilder
-from app.services.llm_client import LLMClient
+from app.services.llm_client import LLMClient, get_llm_client
 from app.services.user_preference_service import UserPreferenceService
 from app.services.emotion_service import EmotionService
 from app.services.personality_service import PersonalityService
 from app.services.personality_detector import PersonalityDetector
+from app.services.content_filter import get_content_filter
 from app.core.exceptions import LLMConnectionError, LLMResponseError
 from app.core.config import settings
 from app.utils.journey_logger import JourneyLogger
@@ -505,8 +506,8 @@ class ChatService:
                 "timestamp": datetime.utcnow().isoformat()
             }
             
-            # Step 10: Stream LLM response
-            logger.info(f"Streaming chat response for conversation {conversation_id}")
+            # Step 10: Fast response generation with explicit content detection
+            logger.info(f"Generating chat response for conversation {conversation_id}")
             journey.log_prompt_building_start()
             journey.log_prompt_built(
                 len(relevant_memories),
@@ -514,8 +515,32 @@ class ChatService:
                 personality_config is not None,
                 detected_emotion is not None
             )
-            journey.log_llm_call_start(settings.lm_studio_model_name)
-            journey.log_streaming_start()
+            
+            # FAST PATH: Check user's message for explicit intent (instant)
+            content_filter = get_content_filter(sensitivity="medium")
+            user_wants_explicit = content_filter.is_explicit(user_message)
+            
+            # Choose appropriate LLM client based on user intent
+            if user_wants_explicit:
+                logger.info("🔞 Explicit intent detected in user message - using local model")
+                active_llm_client = get_llm_client(provider="local")
+                model_name = settings.lm_studio_model_name
+                is_explicit = True
+                
+                yield {
+                    "type": "thinking",
+                    "step": "explicit_content_detected",
+                    "data": {"message": "Using unrestricted model for explicit content..."},
+                    "conversation_id": str(conversation_id),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            else:
+                # Use OpenAI for normal content
+                active_llm_client = self.llm_client
+                model_name = settings.openai_model_name
+                is_explicit = False
+            
+            journey.log_llm_call_start(model_name)
             
             # Emit generation start
             yield {
@@ -526,10 +551,14 @@ class ChatService:
                 "timestamp": datetime.utcnow().isoformat()
             }
             
+            # Stream response directly from chosen LLM (FAST - no waiting!)
+            logger.info(f"Streaming response from {model_name}...")
+            journey.log_streaming_start()
+            
             full_response = []
             chunk_count = 0
             
-            async for chunk in self.llm_client.stream_chat(messages):
+            async for chunk in active_llm_client.stream_chat(messages):
                 full_response.append(chunk)
                 chunk_count += 1
                 journey.log_streaming_chunk(chunk_count)
@@ -539,8 +568,10 @@ class ChatService:
                     "conversation_id": str(conversation_id)
                 }
             
-            # Step 11: Store assistant response in short-term memory
             assistant_response = "".join(full_response)
+            logger.info(f"{model_name} generated {len(assistant_response)} chars")
+            
+            # Step 11: Store assistant response in short-term memory
             self.conversation_buffer.add_message(
                 conversation_id=conversation_id,
                 role="assistant",
@@ -557,13 +588,17 @@ class ChatService:
                 "timestamp": datetime.utcnow().isoformat()
             }
             
+            # Determine which LLM client to use for background analysis
+            bg_llm_client = get_llm_client(provider="local") if is_explicit else self.llm_client
+            
             # Start background analysis in fire-and-forget mode
             asyncio.create_task(
                 self._background_analysis(
                     user_message=user_message,
                     user_db_id=user_db_id,
                     conversation_id=conversation_id,
-                    detected_emotion=detected_emotion
+                    detected_emotion=detected_emotion,
+                    llm_client=bg_llm_client
                 )
             )
             
@@ -626,7 +661,8 @@ class ChatService:
         user_message: str,
         user_db_id: UUID,
         conversation_id: UUID,
-        detected_emotion: Optional[Dict] = None
+        detected_emotion: Optional[Dict] = None,
+        llm_client: Optional[LLMClient] = None
     ) -> None:
         """
         Run non-urgent analysis tasks in background after response is sent.
@@ -636,11 +672,16 @@ class ChatService:
             user_db_id: User database UUID
             conversation_id: Conversation identifier
             detected_emotion: Previously detected emotion (optional)
+            llm_client: LLM client to use (for explicit content handling)
         """
         try:
             logger.info(f"Starting background analysis for conversation {conversation_id}")
             
+            # Use provided LLM client or fall back to default
+            bg_llm = llm_client or self.llm_client
+            
             # Goal detection and tracking (non-urgent)
+            # Note: Goal service uses its own LLM client, not the background one
             if self.goal_service:
                 try:
                     goal_tracking_result = await self.goal_service.detect_and_track_goals(
@@ -656,15 +697,37 @@ class ChatService:
                 except Exception as e:
                     logger.warning(f"Background goal tracking failed: {e}")
             
-            # Memory extraction (non-urgent)
+            # Memory extraction (non-urgent) - use specific LLM client
             try:
                 recent_messages = self.conversation_buffer.get_recent_messages(conversation_id)
-                count = await self.long_term_memory.extract_and_store_memories(
-                    conversation_id=conversation_id,
-                    messages=recent_messages
-                )
-                if count > 0:
-                    logger.info(f"Background: Extracted {count} memories")
+                
+                # Create new memory extractor with the appropriate LLM client
+                from app.services.memory_extraction import MemoryExtractor
+                from app.repositories.vector_store import VectorStoreRepository
+                from app.utils.embeddings import get_embedding_generator
+                from app.core.database import engine
+                from sqlalchemy.ext.asyncio import AsyncSession
+                from sqlalchemy.orm import sessionmaker
+                
+                # We need a database session for memory extraction
+                async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+                async with async_session() as db:
+                    vector_store = VectorStoreRepository(db, llm_client=bg_llm)
+                    embedding_gen = get_embedding_generator()
+                    memory_extractor = MemoryExtractor(
+                        vector_store=vector_store,
+                        embedding_generator=embedding_gen,
+                        llm_client=bg_llm
+                    )
+                    
+                    count = await memory_extractor.extract_and_store(
+                        conversation_id=conversation_id,
+                        messages=recent_messages
+                    )
+                    await db.commit()
+                    
+                    if count > 0:
+                        logger.info(f"Background: Extracted {count} memories")
             except Exception as e:
                 logger.warning(f"Background memory extraction failed: {e}")
                 

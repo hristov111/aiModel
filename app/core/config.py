@@ -13,7 +13,11 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
 
-
+    # OpenAI Configuration
+    openai_api_key: str = ""
+    openai_model_name: str = "gpt-4o-mini"
+    openai_temperature: float = 0.7
+    openai_max_tokens: int = 2000
     
         # LM Studio Configuration
     lm_studio_base_url: str = "http://localhost:1234/v1"

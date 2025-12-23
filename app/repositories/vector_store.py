@@ -352,13 +352,12 @@ class VectorStoreRepository:
                 )
                 
                 if is_contradictory:
+                    # ✅ CONTRADICTION DETECTED - Supersede the old memory
                     logger.info(
                         f"⚠️  CONTRADICTION DETECTED! "
                         f"Old: '{old_memory_model.content}' "
                         f"New: '{new_memory.content}' (similarity: {similarity:.2f})"
                     )
-                else:
-                    logger.info(f"✅ Not contradictory - memories can coexist")
                     
                     # Determine which is newer
                     if new_memory.created_at > old_memory_model.created_at:
@@ -383,6 +382,9 @@ class VectorStoreRepository:
                     
                     # Only consolidate with first contradiction found
                     break
+                else:
+                    # ✅ NOT contradictory - memories can coexist, continue checking
+                    logger.info(f"✅ Not contradictory - memories can coexist")
             
         except Exception as e:
             # Log error but don't fail the memory storage

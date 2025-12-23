@@ -202,12 +202,167 @@ class LMStudioClient(LLMClient):
             return False
 
 
-def get_llm_client() -> LLMClient:
+class OpenAIClient(LLMClient):
+    """OpenAI client using official OpenAI API."""
+    
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        timeout: float = 60.0,
+    ):
+        """
+        Initialize OpenAI client.
+        
+        Args:
+            api_key: OpenAI API key
+            model_name: Model name to use
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+            timeout: Request timeout in seconds
+        """
+        self.api_key = api_key or settings.openai_api_key
+        self.model_name = model_name or settings.openai_model_name
+        self.temperature = temperature or settings.openai_temperature
+        self.max_tokens = max_tokens or settings.openai_max_tokens
+        
+        if not self.api_key:
+            raise ValueError("OpenAI API key not configured. Set OPENAI_API_KEY in .env")
+        
+        # Create OpenAI client
+        self.client = AsyncOpenAI(
+            api_key=self.api_key,
+            timeout=httpx.Timeout(timeout, connect=5.0),
+            max_retries=2,
+        )
+        
+        logger.info(f"Initialized OpenAI client: model={self.model_name}")
+    
+    async def stream_chat(self, messages: List[Dict[str, str]]) -> AsyncIterator[str]:
+        """
+        Stream chat completion from OpenAI.
+        
+        Args:
+            messages: List of message dictionaries
+            
+        Yields:
+            Response text chunks
+            
+        Raises:
+            LLMConnectionError: If connection to OpenAI fails
+            LLMResponseError: If response is invalid
+        """
+        try:
+            logger.debug(f"Streaming chat with {len(messages)} messages")
+            
+            stream = await self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                stream=True,
+            )
+            
+            async for chunk in stream:
+                if chunk.choices and len(chunk.choices) > 0:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        yield delta.content
+                        
+        except httpx.ConnectError as e:
+            error_msg = f"Failed to connect to OpenAI: {e}"
+            logger.error(error_msg)
+            raise LLMConnectionError(error_msg)
+        except httpx.TimeoutException as e:
+            error_msg = f"OpenAI request timed out: {e}"
+            logger.error(error_msg)
+            raise LLMConnectionError(error_msg)
+        except Exception as e:
+            error_msg = f"OpenAI streaming error: {e}"
+            logger.error(error_msg)
+            raise LLMResponseError(error_msg)
+    
+    async def chat(self, messages: List[Dict[str, str]]) -> str:
+        """
+        Get complete chat response (non-streaming).
+        
+        Args:
+            messages: List of message dictionaries
+            
+        Returns:
+            Complete response string
+            
+        Raises:
+            LLMConnectionError: If connection fails
+            LLMResponseError: If response is invalid
+        """
+        try:
+            logger.debug(f"Non-streaming chat with {len(messages)} messages")
+            
+            response = await self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                stream=False,
+            )
+            
+            if not response.choices or len(response.choices) == 0:
+                raise LLMResponseError("No response choices returned")
+            
+            content = response.choices[0].message.content
+            if content is None:
+                raise LLMResponseError("Response content is None")
+            
+            return content
+            
+        except httpx.ConnectError as e:
+            error_msg = f"Failed to connect to OpenAI: {e}"
+            logger.error(error_msg)
+            raise LLMConnectionError(error_msg)
+        except httpx.TimeoutException as e:
+            error_msg = f"OpenAI request timed out: {e}"
+            logger.error(error_msg)
+            raise LLMConnectionError(error_msg)
+        except (LLMConnectionError, LLMResponseError):
+            raise
+        except Exception as e:
+            error_msg = f"OpenAI chat error: {e}"
+            logger.error(error_msg)
+            raise LLMResponseError(error_msg)
+    
+    async def health_check(self) -> bool:
+        """
+        Check if OpenAI is available.
+        
+        Returns:
+            True if healthy, False otherwise
+        """
+        try:
+            # Try to list models as a health check
+            await self.client.models.list()
+            return True
+        except Exception as e:
+            logger.warning(f"OpenAI health check failed: {e}")
+            return False
+
+
+def get_llm_client(provider: str = "openai") -> LLMClient:
     """
     Factory function to get LLM client instance.
     
+    Args:
+        provider: LLM provider ("openai" or "local")
+    
     Returns:
-        LLMClient instance (currently LMStudioClient)
+        LLMClient instance
     """
-    return LMStudioClient()
+    if provider == "local":
+        return LMStudioClient()
+    elif provider == "openai":
+        return OpenAIClient()
+    else:
+        raise ValueError(f"Unknown LLM provider: {provider}")
 

@@ -8,7 +8,15 @@
 ENVIRONMENT=development
 
 # ============================================
-# LM Studio Configuration
+# OpenAI Configuration (Primary LLM)
+# ============================================
+OPENAI_API_KEY=sk-your-openai-api-key-here
+OPENAI_MODEL_NAME=gpt-4o-mini
+OPENAI_TEMPERATURE=0.7
+OPENAI_MAX_TOKENS=2000
+
+# ============================================
+# LM Studio Configuration (Local Model for Explicit Content)
 # ============================================
 LM_STUDIO_BASE_URL=http://localhost:1234/v1
 LM_STUDIO_MODEL_NAME=local-model
