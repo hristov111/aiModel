@@ -1,0 +1,159 @@
+# =============================================================================
+# Docker Compose - Development Configuration
+# =============================================================================
+# AI Companion Service - Development environment with hot-reload
+# 
+# Usage:
+#   docker-compose -f docker-compose.dev.yml up -d    # Start dev environment
+#   docker-compose -f docker-compose.dev.yml down     # Stop dev environment
+#   docker-compose -f docker-compose.dev.yml logs -f  # View logs
+#
+# Features:
+# - Hot-reload enabled (code changes auto-reload)
+# - Development database with exposed ports
+# - No resource limits for easier debugging
+# - Debug logging enabled
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ==========================================================================
+  # PostgreSQL Database - Development
+  # ==========================================================================
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: ai_companion_db_dev
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_companion_dev
+    ports:
+      - "5433:5432"  # Exposed for local development tools
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_companion_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ai_network_dev
+
+  # ==========================================================================
+  # Redis - Development
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: ai_companion_redis_dev
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"  # Exposed for local Redis tools
+    volumes:
+      - redis_dev_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ai_network_dev
+
+  # ==========================================================================
+  # AI Companion Service - Development with Hot Reload
+  # ==========================================================================
+  aiservice:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_DATE: "dev"
+        VERSION: "dev"
+        VCS_REF: "dev"
+    image: ai-companion:dev
+    container_name: ai_companion_service_dev
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Database connection
+      POSTGRES_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ai_companion_dev
+      # Redis connection
+      REDIS_URL: redis://redis:6379/0
+      REDIS_ENABLED: "true"
+      # Development settings
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+      RUN_MIGRATIONS: "true"
+      # Enable reload on code changes
+      UVICORN_RELOAD: "true"
+      # Authentication (enable for proper user management)
+      REQUIRE_AUTHENTICATION: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      # Mount source code for hot-reload
+      - ./app:/app/app:rw
+      - ./migrations:/app/migrations:rw
+      - ./frontend:/app/frontend:rw
+      - ./alembic.ini:/app/alembic.ini:rw
+      # Development logs
+      - ./logs:/app/logs:rw
+      - ./content_audit.log:/app/content_audit.log:rw
+    command: >
+      sh -c "
+      echo 'Starting in DEVELOPMENT mode with hot-reload...' &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+      "
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - ai_network_dev
+    # No resource limits in development for easier debugging
+
+  # ==========================================================================
+  # Adminer - Database Management UI (Optional)
+  # ==========================================================================
+  adminer:
+    image: adminer:latest
+    container_name: ai_companion_adminer
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: nette
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    networks:
+      - ai_network_dev
+    profiles:
+      - with-adminer  # Only start with: docker-compose -f docker-compose.dev.yml --profile with-adminer up
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  ai_network_dev:
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres_dev_data:
+    driver: local
+  redis_dev_data:
+    driver: local
+

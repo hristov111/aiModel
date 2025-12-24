@@ -761,3 +761,84 @@ class DeleteGoalResponse(BaseModel):
     """Goal deletion response."""
     success: bool = True
     message: str = "Goal deleted successfully"
+
+
+# ==========================================
+# Content Classification & Age Verification
+# ==========================================
+
+class AgeVerificationRequest(BaseModel):
+    """Request model for age verification."""
+    conversation_id: UUID = Field(..., description="Conversation ID")
+    confirmed: bool = Field(..., description="User confirms they are 18+")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+                "confirmed": True
+            }
+        }
+
+
+class AgeVerificationResponse(BaseModel):
+    """Response model for age verification."""
+    success: bool = True
+    message: str = "Age verification updated"
+    age_verified: bool
+
+
+class ContentClassificationResponse(BaseModel):
+    """Response model for content classification."""
+    label: str = Field(..., description="Content label")
+    confidence: float = Field(..., description="Classification confidence")
+    indicators: List[str] = Field(default=[], description="Detection indicators")
+    route: str = Field(..., description="Routing destination")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "label": "SAFE",
+                "confidence": 0.95,
+                "indicators": [],
+                "route": "NORMAL"
+            }
+        }
+
+
+class SessionStateResponse(BaseModel):
+    """Response model for session state."""
+    conversation_id: str
+    age_verified: bool
+    current_route: str
+    route_locked: bool
+    route_lock_message_count: int
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+                "age_verified": True,
+                "current_route": "NORMAL",
+                "route_locked": False,
+                "route_lock_message_count": 0
+            }
+        }
+
+
+class ContentAuditStatsResponse(BaseModel):
+    """Response model for content audit statistics."""
+    total_logs: int
+    label_distribution: Dict[str, int]
+    route_distribution: Dict[str, int]
+    action_distribution: Dict[str, int]
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "total_logs": 100,
+                "label_distribution": {"SAFE": 80, "SUGGESTIVE": 15, "EXPLICIT_CONSENSUAL_ADULT": 5},
+                "route_distribution": {"NORMAL": 80, "ROMANCE": 15, "EXPLICIT": 5},
+                "action_distribution": {"generate": 95, "refuse": 3, "age_verify": 2}
+            }
+        }

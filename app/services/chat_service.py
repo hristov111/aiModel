@@ -4,6 +4,7 @@ from typing import AsyncIterator, Optional, Dict, Any
 from uuid import UUID, uuid4
 import logging
 import asyncio
+import re
 from datetime import datetime
 
 from app.models.memory import Message
@@ -16,6 +17,10 @@ from app.services.emotion_service import EmotionService
 from app.services.personality_service import PersonalityService
 from app.services.personality_detector import PersonalityDetector
 from app.services.content_filter import get_content_filter
+from app.services.content_classifier import get_content_classifier, ContentLabel, ClassificationResult
+from app.services.content_router import get_content_router, ModelRoute
+from app.services.session_manager import get_session_manager
+from app.services.content_audit_logger import get_audit_logger
 from app.core.exceptions import LLMConnectionError, LLMResponseError
 from app.core.config import settings
 from app.utils.journey_logger import JourneyLogger
@@ -516,29 +521,266 @@ class ChatService:
                 detected_emotion is not None
             )
             
-            # FAST PATH: Check user's message for explicit intent (instant)
-            content_filter = get_content_filter(sensitivity="medium")
-            user_wants_explicit = content_filter.is_explicit(user_message)
+            # ==========================================
+            # CONTENT CLASSIFICATION & ROUTING
+            # ==========================================
             
-            # Choose appropriate LLM client based on user intent
-            if user_wants_explicit:
-                logger.info("🔞 Explicit intent detected in user message - using local model")
-                active_llm_client = get_llm_client(provider="local")
-                model_name = settings.lm_studio_model_name
-                is_explicit = True
+            # Get services
+            # Create LLM judge client for classification (use fast OpenAI model)
+            llm_judge_client = None
+            if settings.content_llm_judge_enabled:
+                from app.services.llm_client import OpenAIClient
+                try:
+                    llm_judge_client = OpenAIClient(
+                        model_name="gpt-4o-mini",  # Fast and cheap
+                        temperature=0.3,  # Low temperature for consistent classification
+                        max_tokens=150  # Short response
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to create LLM judge client: {e}")
+            
+            classifier = get_content_classifier(
+                llm_client=llm_judge_client,
+                enable_llm_judge=settings.content_llm_judge_enabled
+            )
+            router = get_content_router()
+            session_manager = get_session_manager()
+            audit_logger = get_audit_logger()
+            
+            # Get or create session FIRST (before classification)
+            session = session_manager.get_session(conversation_id, user_db_id or conversation_id)
+            
+            # Check if route is locked (continuing explicit conversation)
+            if session_manager.is_route_locked(conversation_id):
+                route = session_manager.get_current_route(conversation_id)
                 
+                # Create a mock classification for locked route
+                # This maintains compatibility with audit logging
+                if route == ModelRoute.EXPLICIT:
+                    label = ContentLabel.EXPLICIT_CONSENSUAL_ADULT
+                elif route == ModelRoute.FETISH:
+                    label = ContentLabel.EXPLICIT_FETISH
+                elif route == ModelRoute.ROMANCE:
+                    label = ContentLabel.SUGGESTIVE
+                else:
+                    label = ContentLabel.SAFE
+                
+                classification = ClassificationResult(
+                    label=label,
+                    confidence=1.0,  # High confidence since we're locked in
+                    reasoning="Route locked - continuing explicit conversation context"
+                )
+                
+                logger.info(
+                    f"Route locked to {route.value} "
+                    f"({session.route_lock_message_count} messages remaining) - "
+                    f"skipping classification"
+                )
+            else:
+                # Normal flow: Classify content
+                classification = classifier.classify(user_message)
+                logger.info(
+                    f"Content classified: {classification.label.value} "
+                    f"(confidence: {classification.confidence:.2f})"
+                )
+                
+                # Determine route from classification
+                route = router.route(classification)
+            
+            # Check if this is an age verification response
+            # Detect "yes", "y", "confirm", "i am 18", "18+" etc.
+            age_confirmation_patterns = [
+                r'\b(yes|yea|yeah|yep|y)\b',
+                r'\b(i am|im|i\'m)\s*(18|over 18|above 18|18\+)',
+                r'\b(confirm|confirmed|i confirm)\b',
+                r'\b(18|eighteen)\s*(years old|years|yo|\+)',
+            ]
+            is_age_confirmation = any(
+                re.search(pattern, user_message.lower()) 
+                for pattern in age_confirmation_patterns
+            )
+            
+            # If user is confirming age and session has explicit attempts, verify them
+            if is_age_confirmation and session.explicit_attempts_without_verification > 0:
+                logger.info(f"Age confirmation detected: '{user_message}' - verifying user")
+                session_manager.verify_age(conversation_id)
+                
+                # Log audit
+                audit_logger.log_classification(
+                    conversation_id=conversation_id,
+                    user_id=user_db_id or conversation_id,
+                    original_text=user_message,
+                    classification=classification,
+                    route=ModelRoute.NORMAL,
+                    route_locked=False,
+                    age_verified=True,
+                    action="age_verified",
+                    session_info={"confirmation_message": user_message}
+                )
+                
+                # Confirm age verification
                 yield {
                     "type": "thinking",
-                    "step": "explicit_content_detected",
-                    "data": {"message": "Using unrestricted model for explicit content..."},
+                    "step": "age_verified",
+                    "data": {"message": "Age verified successfully"},
                     "conversation_id": str(conversation_id),
                     "timestamp": datetime.utcnow().isoformat()
                 }
-            else:
-                # Use OpenAI for normal content
-                active_llm_client = self.llm_client
-                model_name = settings.openai_model_name
-                is_explicit = False
+                
+                confirmation_msg = "Thank you for confirming. You can now ask your question again."
+                for chunk in confirmation_msg:
+                    yield {
+                        "type": "chunk",
+                        "chunk": chunk,
+                        "conversation_id": str(conversation_id)
+                    }
+                
+                yield {
+                    "type": "done",
+                    "conversation_id": str(conversation_id),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                return
+            
+            # Check if age verification is required
+            if session_manager.requires_age_verification(conversation_id, route):
+                attempt_count = session_manager.track_explicit_attempt(conversation_id)
+                age_prompt = session_manager.get_age_verification_prompt(attempt_count)
+                
+                logger.warning(
+                    f"Age verification required for {route} "
+                    f"(attempt {attempt_count}, conversation {conversation_id})"
+                )
+                
+                # Log audit
+                audit_logger.log_classification(
+                    conversation_id=conversation_id,
+                    user_id=user_db_id or conversation_id,
+                    original_text=user_message,
+                    classification=classification,
+                    route=route,
+                    route_locked=session_manager.is_route_locked(conversation_id),
+                    age_verified=False,
+                    action="age_verify",
+                    session_info={"attempt_count": attempt_count}
+                )
+                
+                # Return age verification prompt
+                yield {
+                    "type": "thinking",
+                    "step": "age_verification_required",
+                    "data": {"message": "Age verification required"},
+                    "conversation_id": str(conversation_id),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                for chunk in age_prompt:
+                    yield {
+                        "type": "chunk",
+                        "chunk": chunk,
+                        "conversation_id": str(conversation_id)
+                    }
+                
+                yield {
+                    "type": "done",
+                    "conversation_id": str(conversation_id),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                return
+            
+            # Check if should refuse
+            if router.should_refuse(route):
+                refusal_message = router.get_refusal_message(route)
+                
+                logger.warning(
+                    f"Refusing content: {classification.label.value} "
+                    f"(route: {route}, conversation {conversation_id})"
+                )
+                
+                # Log audit
+                audit_logger.log_classification(
+                    conversation_id=conversation_id,
+                    user_id=user_db_id or conversation_id,
+                    original_text=user_message,
+                    classification=classification,
+                    route=route,
+                    route_locked=False,
+                    age_verified=session.age_verified,
+                    action="refuse",
+                    refusal_reason=classification.label.value
+                )
+                
+                # Return refusal
+                yield {
+                    "type": "thinking",
+                    "step": "content_refused",
+                    "data": {"message": f"Content refused: {classification.label.value}"},
+                    "conversation_id": str(conversation_id),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                
+                for chunk in refusal_message:
+                    yield {
+                        "type": "chunk",
+                        "chunk": chunk,
+                        "conversation_id": str(conversation_id)
+                    }
+                
+                yield {
+                    "type": "done",
+                    "conversation_id": str(conversation_id),
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                return
+            
+            # Update session route
+            session_manager.set_route(conversation_id, route)
+            
+            # Get appropriate client and system prompt
+            active_llm_client = router.get_client(route)
+            route_system_prompt = router.get_system_prompt(route)
+            
+            # Override system prompt in messages if explicit route
+            if route in (ModelRoute.EXPLICIT, ModelRoute.FETISH, ModelRoute.ROMANCE):
+                # Replace system message with route-specific prompt
+                if messages and messages[0]["role"] == "system":
+                    messages[0]["content"] = route_system_prompt
+                else:
+                    messages.insert(0, {"role": "system", "content": route_system_prompt})
+            
+            # Log audit
+            audit_logger.log_classification(
+                conversation_id=conversation_id,
+                user_id=user_db_id or conversation_id,
+                original_text=user_message,
+                classification=classification,
+                route=route,
+                route_locked=session_manager.is_route_locked(conversation_id),
+                age_verified=session.age_verified,
+                action="generate",
+                session_info={
+                    "route_lock_count": session.route_lock_message_count,
+                    "current_route": session.current_route.value
+                }
+            )
+            
+            # Emit routing info
+            yield {
+                "type": "thinking",
+                "step": "content_routed",
+                "data": {
+                    "message": f"Content routed to {route.value}",
+                    "label": classification.label.value,
+                    "confidence": round(classification.confidence, 2),
+                    "route": route.value
+                },
+                "conversation_id": str(conversation_id),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            # For backward compatibility
+            is_explicit = route in (ModelRoute.EXPLICIT, ModelRoute.FETISH)
+            model_name = "local-model" if is_explicit else settings.openai_model_name
             
             journey.log_llm_call_start(model_name)
             

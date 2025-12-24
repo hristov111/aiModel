@@ -5,7 +5,7 @@ User Data Inspector - Show all database information for a specific user
 
 import asyncio
 import sys
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -73,7 +73,19 @@ async def show_user_data(external_user_id: str):
     """Show all database information for a user"""
     
     # Create database engine
-    engine = create_async_engine(settings.postgres_url, echo=False)
+    # Check if we're running inside Docker (use postgres:5432) or outside (use localhost:5433)
+    import os
+    if os.path.exists('/.dockerenv'):
+        # Running inside Docker container
+        postgres_url = settings.postgres_url
+        print(f"{Colors.YELLOW}Running inside Docker container{Colors.END}")
+    else:
+        # Running on host machine
+        postgres_url = settings.postgres_url.replace('@postgres:5432/', '@localhost:5433/')
+        print(f"{Colors.YELLOW}Running on host machine{Colors.END}")
+    
+    print(f"{Colors.YELLOW}Connecting to: {postgres_url.replace('postgres:postgres', 'postgres:***')}{Colors.END}")
+    engine = create_async_engine(postgres_url, echo=False)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     
     async with async_session() as session:
@@ -355,11 +367,19 @@ async def show_user_data(external_user_id: str):
             print(f"  • {Colors.CYAN}Days Known:{Colors.END} {relationship.days_known}")
         
         # Database size info
-        result = await session.execute(
-            select(func.pg_size_pretty(func.pg_database_size('ai_companion')))
-        )
-        db_size = result.scalar()
-        print(f"\n{Colors.BOLD}Database Size:{Colors.END} {db_size}")
+        try:
+            # Extract database name from connection URL
+            import re
+            db_name_match = re.search(r'/([^/]+)(?:\?|$)', str(engine.url))
+            db_name = db_name_match.group(1) if db_name_match else 'ai_companion'
+            
+            result = await session.execute(
+                text(f"SELECT pg_size_pretty(pg_database_size('{db_name}'))")
+            )
+            db_size = result.scalar()
+            print(f"\n{Colors.BOLD}Database Size:{Colors.END} {db_size}")
+        except Exception as e:
+            print(f"\n{Colors.YELLOW}Database size unavailable:{Colors.END} {e}")
         
         print(f"\n{Colors.GREEN}✅ Data inspection complete!{Colors.END}\n")
     
@@ -371,7 +391,7 @@ def main():
     if len(sys.argv) > 1:
         user_id = sys.argv[1]
     else:
-        user_id = "myuser123"  # Default user
+        user_id = "default_user"  # Default user in Docker setup
     
     print(f"{Colors.BOLD}Connecting to database...{Colors.END}")
     asyncio.run(show_user_data(user_id))

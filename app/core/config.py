@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     memory_categorization_method: str = "hybrid"  # Options: "llm", "pattern", "hybrid"
     contradiction_detection_method: str = "hybrid"  # Options: "llm", "pattern", "hybrid"
     
+    # Content Classification & Routing
+    content_routing_enabled: bool = True  # Enable intelligent content routing
+    content_audit_log_file: str = "content_audit.log"  # Audit log file path
+    session_timeout_hours: int = 24  # Session state timeout
+    route_lock_message_count: int = 5  # Messages to stay in explicit mode
+    
+    # Layer 4: LLM Judge for borderline cases
+    content_llm_judge_enabled: bool = True  # Enable LLM judge for borderline classifications
+    content_llm_judge_threshold: float = 0.7  # Use LLM if pattern confidence below this
+    content_llm_judge_provider: str = "openai"  # LLM provider for judge ("openai" or "local")
+    
     # System Configuration
     system_persona: str = "a helpful, knowledgeable AI assistant with memory of past conversations"
     rate_limit_requests_per_minute: int = 30

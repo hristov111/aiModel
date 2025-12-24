@@ -213,22 +213,30 @@ class ChatApp {
         const apiKey = getConfig('API_KEY');
         const jwtToken = getConfig('JWT_TOKEN');
         
-        if (!userId) {
-            this.showNotification('Please set User ID in settings', 'error');
+        // Check if we have any form of authentication
+        if (!userId && !apiKey && !jwtToken) {
+            this.showNotification('Please configure authentication in settings (User ID, API Key, or JWT Token)', 'error');
             this.resetSendButton();
             return;
         }
         
         // Prepare headers
         const headers = {
-            'Content-Type': 'application/json',
-            'X-User-Id': userId
+            'Content-Type': 'application/json'
         };
         
+        // Priority: JWT Token > API Key > X-User-Id (dev mode)
         if (jwtToken) {
             headers['Authorization'] = `Bearer ${jwtToken}`;
+            // Don't send X-User-Id when using JWT - the token contains the user ID
+            console.log('🔐 Using JWT authentication');
         } else if (apiKey) {
             headers['X-API-Key'] = apiKey;
+            console.log('🔑 Using API Key authentication');
+        } else if (userId) {
+            // Only use X-User-Id header in development without JWT/API key
+            headers['X-User-Id'] = userId;
+            console.log('⚠️ Using X-User-Id (dev mode)');
         }
         
         // Prepare request body

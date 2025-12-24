@@ -20,6 +20,8 @@ from app.api.models import (
     GoalRequest, UpdateGoalRequest, ProgressUpdateRequest, GoalResponse,
     GoalListResponse, ProgressEntryResponse, GoalProgressHistoryResponse,
     GoalAnalyticsResponse, CheckinGoalsResponse, DeleteGoalResponse,
+    AgeVerificationRequest, AgeVerificationResponse, ContentClassificationResponse,
+    SessionStateResponse, ContentAuditStatsResponse,
     HealthResponse, ErrorResponse,
     CreateTokenRequest, TokenResponse, ValidateTokenRequest, ValidateTokenResponse
 )
@@ -178,11 +180,13 @@ async def health_check():
     """
     Health check endpoint for monitoring.
     """
+    from sqlalchemy import text
+    
     # Check database
     db_healthy = False
     try:
         async with engine.connect() as conn:
-            await conn.execute("SELECT 1")
+            await conn.execute(text("SELECT 1"))
         db_healthy = True
     except Exception as e:
         logger.warning(f"Database health check failed: {e}")
@@ -1132,4 +1136,162 @@ async def get_goals_needing_checkin(
         goals=[GoalResponse(**g) for g in goals],
         total=len(goals)
     )
+
+
+# ==========================================
+# Content Classification & Age Verification
+# ==========================================
+
+@router.post("/content/age-verify", response_model=AgeVerificationResponse)
+@limiter.limit("20/minute")
+async def verify_age(
+    request: Request,
+    age_request: AgeVerificationRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Verify user's age for explicit content access.
+    
+    This endpoint allows users to confirm they are 18+ years old,
+    which is required for accessing explicit content routes.
+    """
+    from app.services.session_manager import get_session_manager
+    
+    # Verify conversation ownership
+    await verify_conversation_ownership(db, age_request.conversation_id, user_id)
+    
+    session_manager = get_session_manager()
+    
+    if age_request.confirmed:
+        session_manager.verify_age(age_request.conversation_id)
+        logger.info(f"Age verified for conversation {age_request.conversation_id}")
+        
+        return AgeVerificationResponse(
+            success=True,
+            message="Age verified successfully",
+            age_verified=True
+        )
+    else:
+        logger.info(f"Age verification declined for conversation {age_request.conversation_id}")
+        
+        return AgeVerificationResponse(
+            success=True,
+            message="Age verification declined",
+            age_verified=False
+        )
+
+
+@router.get("/content/session/{conversation_id}", response_model=SessionStateResponse)
+@limiter.limit("50/minute")
+async def get_session_state(
+    request: Request,
+    conversation_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get current session state for a conversation.
+    
+    Returns information about age verification, current route, and lock status.
+    """
+    from app.services.session_manager import get_session_manager
+    
+    # Verify conversation ownership
+    await verify_conversation_ownership(db, conversation_id, user_id)
+    
+    session_manager = get_session_manager()
+    
+    # Get user DB ID
+    from app.core.auth import get_or_create_user_db_id
+    user_db_id = await get_or_create_user_db_id(db, user_id, auto_create=False)
+    
+    if not user_db_id:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    session = session_manager.get_session(conversation_id, user_db_id)
+    
+    return SessionStateResponse(
+        conversation_id=str(conversation_id),
+        age_verified=session.age_verified,
+        current_route=session.current_route.value,
+        route_locked=session_manager.is_route_locked(conversation_id),
+        route_lock_message_count=session.route_lock_message_count
+    )
+
+
+@router.post("/content/classify", response_model=ContentClassificationResponse)
+@limiter.limit("50/minute")
+async def classify_content(
+    request: Request,
+    chat_request: ChatRequest,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Classify content without generating a response.
+    
+    Useful for testing the content classification system or
+    pre-checking content before sending.
+    """
+    from app.services.content_classifier import get_content_classifier
+    from app.services.content_router import get_content_router
+    
+    classifier = get_content_classifier()
+    router = get_content_router()
+    
+    classification = classifier.classify(chat_request.message)
+    route = router.route(classification)
+    
+    return ContentClassificationResponse(
+        label=classification.label.value,
+        confidence=classification.confidence,
+        indicators=classification.indicators[:5],
+        route=route.value
+    )
+
+
+@router.get("/content/audit/stats", response_model=ContentAuditStatsResponse)
+@limiter.limit("20/minute")
+async def get_audit_stats(
+    request: Request,
+    user_id: str = Depends(get_current_user_id)
+):
+    """
+    Get content audit statistics.
+    
+    Returns aggregated statistics about content classification and routing.
+    Requires authentication.
+    """
+    from app.services.content_audit_logger import get_audit_logger
+    
+    audit_logger = get_audit_logger()
+    stats = audit_logger.get_stats()
+    
+    return ContentAuditStatsResponse(**stats)
+
+
+@router.post("/content/session/{conversation_id}/clear")
+@limiter.limit("20/minute")
+async def clear_session(
+    request: Request,
+    conversation_id: UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Clear session state for a conversation.
+    
+    Resets age verification and route lock status.
+    """
+    from app.services.session_manager import get_session_manager
+    
+    # Verify conversation ownership
+    await verify_conversation_ownership(db, conversation_id, user_id)
+    
+    session_manager = get_session_manager()
+    session_manager.clear_session(conversation_id)
+    
+    logger.info(f"Cleared session for conversation {conversation_id}")
+    
+    return {"success": True, "message": "Session cleared successfully"}
 

@@ -206,3 +206,4 @@ Reference documents created:
 - Check health: `curl http://localhost:8000/health`
 - Read docs: `OPENAI_INTEGRATION_SUMMARY.md`
 
+

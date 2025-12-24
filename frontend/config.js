@@ -8,7 +8,7 @@
 const CONFIG = {
     // Default API configuration
     DEFAULT_API_URL: 'http://localhost:8000',
-    DEFAULT_USER_ID: 'user123',
+    DEFAULT_USER_ID: null, // No default - user must configure
     
     // Storage keys
     STORAGE_KEYS: {

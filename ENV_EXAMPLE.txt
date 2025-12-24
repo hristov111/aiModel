@@ -1,10 +1,28 @@
-# AI Companion Service Configuration
+# =============================================================================
+# AI Companion Service - Environment Configuration
+# =============================================================================
 # Copy this file to .env and configure for your environment
+#
+# IMPORTANT:
+# - NEVER commit .env to version control
+# - Generate secure secrets for production
+# - Change all default passwords
+# - Use strong, unique values for each environment
+#
+# Quick Start:
+#   cp ENV_EXAMPLE.txt .env
+#   nano .env  # Edit with your values
+#   make dev   # Start development
+#
+# Generate secrets:
+#   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+# =============================================================================
 
 # ============================================
 # Environment
 # ============================================
-# Set to 'production' to enable production validation
+# Options: development, staging, production
+# Set to 'production' to enable production validation and security
 ENVIRONMENT=development
 
 # ============================================
@@ -18,7 +36,10 @@ OPENAI_MAX_TOKENS=2000
 # ============================================
 # LM Studio Configuration (Local Model for Explicit Content)
 # ============================================
-LM_STUDIO_BASE_URL=http://localhost:1234/v1
+# For Docker: Use host.docker.internal instead of localhost
+# For host machine: Use localhost
+LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1
+# LM_STUDIO_BASE_URL=http://localhost:1234/v1  # Uncomment for non-Docker
 LM_STUDIO_MODEL_NAME=local-model
 LM_STUDIO_TEMPERATURE=0.7
 LM_STUDIO_MAX_TOKENS=2000
@@ -29,7 +50,21 @@ VPS_API_KEY=your-secret-api-key-here
 # ============================================
 # Database Configuration
 # ============================================
-POSTGRES_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/ai_companion
+# Docker: Use container name 'postgres'
+# Host: Use 'localhost' and exposed port
+# Production: Use strong passwords!
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=changeme_in_production
+POSTGRES_DB=ai_companion
+POSTGRES_PORT=5433  # External port (host machine)
+
+# Connection string
+# Docker (auto-configured in docker-compose.yml):
+POSTGRES_URL=postgresql+asyncpg://postgres:changeme_in_production@postgres:5432/ai_companion
+# Host machine (non-Docker):
+# POSTGRES_URL=postgresql+asyncpg://postgres:changeme_in_production@localhost:5433/ai_companion
+
+# Connection pool settings
 POSTGRES_POOL_SIZE=10
 POSTGRES_MAX_OVERFLOW=20
 
@@ -58,7 +93,9 @@ RATE_LIMIT_REQUESTS_PER_MINUTE=30
 # Authentication (NEW in v2.0)
 # ============================================
 REQUIRE_AUTHENTICATION=true
-JWT_SECRET_KEY=change-this-to-a-long-random-string-in-production
+# CRITICAL: Generate a secure secret key for production
+# Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+JWT_SECRET_KEY=CHANGE_THIS_TO_A_LONG_RANDOM_STRING_IN_PRODUCTION
 JWT_ALGORITHM=HS256
 JWT_EXPIRATION_HOURS=24
 
@@ -69,11 +106,18 @@ JWT_EXPIRATION_HOURS=24
 CORS_ORIGINS=http://localhost:3000,http://localhost:8080
 
 # ============================================
-# Redis Configuration (Optional - for distributed deployments)
+# Redis Configuration (Recommended for Production)
 # ============================================
 # Enable Redis for distributed short-term memory across multiple instances
-REDIS_URL=redis://localhost:6379/0
-REDIS_ENABLED=false
+REDIS_ENABLED=true
+REDIS_PASSWORD=changeme_in_production
+REDIS_PORT=6379
+
+# Connection string
+# Docker (with password):
+REDIS_URL=redis://:changeme_in_production@redis:6379/0
+# Host machine:
+# REDIS_URL=redis://:changeme_in_production@localhost:6379/0
 
 # ============================================
 # Monitoring & Observability
@@ -82,7 +126,32 @@ REDIS_ENABLED=false
 # Request IDs automatically added to all requests
 
 # ============================================
+# Application Settings
+# ============================================
+APP_PORT=8000
+
+# ============================================
 # Logging
 # ============================================
+# Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 LOG_LEVEL=INFO
+
+# ============================================
+# Docker Build Arguments (Optional)
+# ============================================
+BUILD_DATE=2024-01-01
+VERSION=1.0.0
+VCS_REF=main
+
+# ============================================
+# Nginx Configuration (Optional - for reverse proxy)
+# ============================================
+NGINX_HTTP_PORT=80
+NGINX_HTTPS_PORT=443
+
+# ============================================
+# Migration Settings
+# ============================================
+# Automatically run database migrations on startup
+RUN_MIGRATIONS=true
 

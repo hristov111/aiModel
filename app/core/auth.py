@@ -46,6 +46,11 @@ async def get_current_user_id(
     Raises:
         HTTPException: If authentication fails
     """
+    # If authentication is not required, return default user
+    if not settings.require_authentication:
+        logger.debug("Authentication disabled - using default user")
+        return "default_user"
+    
     # Method 1: X-User-Id header (development mode)
     # WARNING: Only use in development! Not secure for production.
     if x_user_id:
@@ -353,6 +358,11 @@ async def verify_conversation_ownership(
         HTTPException: If conversation exists but belongs to another user
     """
     from app.models.database import ConversationModel
+    
+    # Skip ownership verification if authentication is disabled
+    if not settings.require_authentication:
+        logger.debug(f"Authentication disabled - skipping conversation ownership verification for {conversation_id}")
+        return True
     
     # First check if conversation exists in database
     result = await session.execute(

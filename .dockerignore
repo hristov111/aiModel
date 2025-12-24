@@ -1,4 +1,11 @@
-# Python
+# =============================================================================
+# Docker Ignore File
+# =============================================================================
+# Prevents unnecessary files from being copied into Docker images
+# Reduces image size and improves build performance
+# =============================================================================
+
+# Python cache and compiled files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,50 +14,121 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+*.pyc
+*.pyo
 
-# Virtual Environment
+# Virtual Environments
 venv/
 env/
 ENV/
-.venv
+.venv/
+virtualenv/
 
-# Environment files
+# Environment and Secret Files
 .env
-.env.local
+.env.*
+*.env
+!.env.example
+*.pem
+*.key
 
-# IDE
+# IDE and Editor Files
 .vscode/
 .idea/
+.vs/
 *.swp
 *.swo
+*.swn
+*~
+.project
+.classpath
+.settings/
 
 # Testing
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
+.nox/
+.hypothesis/
+coverage.xml
+*.cover
+.cache
 
 # Git
 .git/
 .gitignore
+.gitattributes
+.github/
 
-# Documentation
-README.md
+# Documentation (build docs in image if needed)
+*.md
+!README.md
 docs/
+*.rst
 
-# Logs
+# Logs and temporary files
 *.log
+logs/
+app.log
+service.log
+content_audit.log
+message_journey.log
+*.tmp
+*.temp
 
-# Database
+# Database files (use volumes instead)
 *.db
 *.sqlite
+*.sqlite3
+backups/
 
-# OS
+# OS specific
 .DS_Store
 Thumbs.db
+*.bak
+*~
 
-# Docker
-docker-compose.yml
-Dockerfile
+# Docker files (no need to copy into image)
+docker-compose*.yml
+Dockerfile*
 .dockerignore
+
+# Scripts (unless needed in container)
+*.sh
+!docker-entrypoint.sh
+setup_*.sh
+configure_*.sh
+
+# Test files
+test_*.py
+*_test.py
+tests/
+pytest.ini
+
+# Development only files
+Makefile
+.editorconfig
+.pre-commit-config.yaml
+
+# Large files and directories
+node_modules/
+bower_components/
+.npm/
+.yarn/
+
+# Miscellaneous
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+*.sage.py
+.ipynb_checkpoints/
+
+# Backup files
+*.backup
+*.old
+*-old
+*-backup
 
