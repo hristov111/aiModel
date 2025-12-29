@@ -111,11 +111,11 @@ class MemoryExtractor:
             for fact, embedding in zip(facts, embeddings):
                 try:
                     # Check for duplicate memories (similarity > 0.95 = very similar)
-                    existing_similar = await self.vector_store.search_memories(
+                    existing_similar = await self.vector_store.search_similar(
                         conversation_id=conversation_id,
                         query_embedding=embedding,
                         top_k=1,
-                        similarity_threshold=0.95  # Very high threshold for duplicates
+                        min_similarity=0.95  # Very high threshold for duplicates
                     )
                     
                     # If very similar memory exists, skip storing

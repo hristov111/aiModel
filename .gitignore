@@ -70,3 +70,4 @@ models/pretrained/
 .DS_Store
 Thumbs.db
 
+.env.bak

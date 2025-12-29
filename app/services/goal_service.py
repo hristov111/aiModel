@@ -270,15 +270,26 @@ class GoalService:
         }
         
         # 1. Check for new goal declaration
-        detected_goal = self.detector.detect_goal(message)
-        if detected_goal and detected_goal['confidence'] > 0.7:
+        detected_goal = await self.detector.detect_goal(message)
+        if detected_goal and detected_goal.get('confidence', 0) > 0.7:
+            # Parse target_date (LLM may return ISO string)
+            target_date = detected_goal.get('target_date')
+            if isinstance(target_date, str) and target_date.strip():
+                try:
+                    target_date = datetime.fromisoformat(target_date.replace('Z', '+00:00'))
+                except Exception:
+                    logger.debug(f"Ignoring unparsable goal target_date: {target_date!r}")
+                    target_date = None
+            elif not isinstance(target_date, datetime):
+                target_date = None
+
             # Create goal
             goal = await self.create_goal(
                 user_id=user_id,
                 title=detected_goal['title'],
                 category=detected_goal['category'],
-                target_date=detected_goal.get('target_date'),
-                motivation=self.detector.extract_motivation(message)
+                target_date=target_date,
+                motivation=detected_goal.get('motivation') or self.detector.extract_motivation(message)
             )
             result['new_goals'].append(goal)
             logger.info(f"Auto-created goal: {detected_goal['title']}")

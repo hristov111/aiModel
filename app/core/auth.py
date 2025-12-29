@@ -46,10 +46,14 @@ async def get_current_user_id(
     Raises:
         HTTPException: If authentication fails
     """
-    # If authentication is not required, return default user
+    # If authentication is not required, allow X-User-Id but don't require it
     if not settings.require_authentication:
-        logger.debug("Authentication disabled - using default user")
-        return "default_user"
+        if x_user_id:
+            logger.debug(f"Authentication disabled - using provided X-User-Id: {x_user_id}")
+            return x_user_id
+        else:
+            logger.debug("Authentication disabled - no X-User-Id provided, using default user")
+            return "default_user"
     
     # Method 1: X-User-Id header (development mode)
     # WARNING: Only use in development! Not secure for production.

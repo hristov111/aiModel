@@ -318,6 +318,23 @@ class ChatService:
                 except Exception as e:
                     logger.warning(f"Could not load preferences: {e}")
                     return None
+
+            # ==========================================
+            # PARALLEL TASK 5: Load Active Goals
+            # ==========================================
+            async def load_goals():
+                """Load user's active goals in parallel (fast DB read, no LLM)."""
+                if not (self.goal_service and user_db_id):
+                    return None
+                try:
+                    active_goals = await self.goal_service.get_user_goals(
+                        user_id=user_db_id,
+                        include_completed=False
+                    )
+                    return {"active_goals": active_goals}
+                except Exception as e:
+                    logger.warning(f"Could not load goals: {e}")
+                    return None
             
             # ==========================================
             # RUN ALL DETECTIONS IN PARALLEL
@@ -329,12 +346,14 @@ class ChatService:
                 personality_config_detected,
                 detected_emotion,
                 (personality_config, relationship_state),
-                user_preferences
+                user_preferences,
+                goal_context
             ) = await asyncio.gather(
                 detect_personality(),
                 detect_emotion(),
                 load_personality(),
                 load_preferences(),
+                load_goals(),
                 return_exceptions=True
             )
             
@@ -351,6 +370,9 @@ class ChatService:
             if isinstance(user_preferences, Exception):
                 logger.warning(f"Preferences load error: {user_preferences}")
                 user_preferences = None
+            if isinstance(goal_context, Exception):
+                logger.warning(f"Goals load error: {goal_context}")
+                goal_context = None
             
             logger.info("Parallel detections completed")
             
@@ -413,8 +435,8 @@ class ChatService:
                 except Exception as e:
                     logger.warning(f"Could not get emotion trends: {e}")
             
-            # Note: Goal tracking moved to background (non-urgent)
-            goal_context = None
+            # Note: Goal *tracking* (detecting/recording new goal events) runs in background,
+            # but we still load active goals above for prompt context injection.
             
             # Step 7: Retrieve relevant long-term memories
             yield {

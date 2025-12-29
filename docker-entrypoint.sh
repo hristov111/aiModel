@@ -11,8 +11,10 @@ wait_for_postgres() {
     local max_attempts=30
     local attempt=0
     
-    # Extract database host and port from POSTGRES_URL
+    # Extract database credentials from POSTGRES_URL
     # Format: postgresql+asyncpg://user:pass@host:port/db
+    local db_user=$(echo "${POSTGRES_URL}" | sed -n 's/.*:\/\/\([^:]*\):.*/\1/p')
+    local db_password=$(echo "${POSTGRES_URL}" | sed -n 's/.*:\/\/[^:]*:\([^@]*\)@.*/\1/p')
     local db_host=$(echo "${POSTGRES_URL}" | sed -n 's/.*@\([^:]*\):.*/\1/p')
     local db_port=$(echo "${POSTGRES_URL}" | sed -n 's/.*:\([0-9]*\)\/.*/\1/p')
     local db_name=$(echo "${POSTGRES_URL}" | sed -n 's/.*\/\([^?]*\).*/\1/p')
@@ -20,7 +22,7 @@ wait_for_postgres() {
     echo "  Connecting to: ${db_host}:${db_port}/${db_name}"
     
     while [ $attempt -lt $max_attempts ]; do
-        if python -c "import psycopg2; conn = psycopg2.connect(host='${db_host}', port=${db_port}, user='postgres', password='postgres', dbname='${db_name}'); conn.close()" 2>/dev/null; then
+        if python -c "import psycopg2; conn = psycopg2.connect(host='${db_host}', port=${db_port}, user='${db_user}', password='${db_password}', dbname='${db_name}'); conn.close()" 2>/dev/null; then
             echo "✓ PostgreSQL is ready!"
             return 0
         fi
