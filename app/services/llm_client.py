@@ -86,10 +86,9 @@ class LMStudioClient(LLMClient):
             max_retries=2,
         )
         
-        # Log initialization (mask API key for security)
+        # Log initialization (never log secret material, even partially)
         if settings.vps_api_key:
-            masked_key = settings.vps_api_key[:8] + "..." if len(settings.vps_api_key) > 8 else "***"
-            logger.info(f"Initialized LM Studio client: {self.base_url} (X-API-Key: {masked_key})")
+            logger.info(f"Initialized LM Studio client: {self.base_url} (X-API-Key configured)")
         else:
             logger.info(f"Initialized LM Studio client: {self.base_url} (no auth)")
     

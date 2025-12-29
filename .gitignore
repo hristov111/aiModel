@@ -46,6 +46,10 @@ htmlcov/
 # Logs
 *.log
 
+# Backups / dumps (may contain private user data)
+backups/
+*.sql
+
 # Database
 *.db
 *.sqlite
