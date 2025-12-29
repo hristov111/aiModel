@@ -240,3 +240,4 @@ The system now intelligently uses:
 This provides the best of both worlds: speed and quality from OpenAI, with privacy and freedom from local model when needed.
 
 
+
