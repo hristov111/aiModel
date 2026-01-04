@@ -23,8 +23,10 @@ RED    := \033[0;31m
 RESET  := \033[0m
 
 # Variables
-COMPOSE_DEV := docker-compose -f docker-compose.dev.yml
-COMPOSE_PROD := docker-compose
+# Prefer Docker Compose v2 (`docker compose`). Docker Compose v1 (`docker-compose`)
+# is incompatible with newer Docker Engine versions (e.g., can throw KeyError: 'ContainerConfig').
+COMPOSE_DEV := docker compose -f docker-compose.dev.yml
+COMPOSE_PROD := docker compose
 SERVICE_NAME := aiservice
 DB_SERVICE := postgres
 

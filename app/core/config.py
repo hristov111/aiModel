@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     content_audit_log_file: str = "content_audit.log"  # Audit log file path
     session_timeout_hours: int = 24  # Session state timeout
     route_lock_message_count: int = 5  # Messages to stay in explicit mode
+
+    # Periodic Memory Consolidation Job (dedup / cleanup)
+    memory_consolidation_job_enabled: bool = False
+    memory_consolidation_job_interval_minutes: int = 60  # run hourly by default
+    memory_consolidation_job_max_users_per_run: int = 50
+    memory_consolidation_job_max_memories_per_user: int = 500
+    memory_consolidation_job_semantic_threshold: float = 0.92  # 0.92 catches paraphrases; tune as needed
     
     # Layer 4: LLM Judge for borderline cases
     content_llm_judge_enabled: bool = True  # Enable LLM judge for borderline classifications
@@ -65,11 +72,23 @@ class Settings(BaseSettings):
     content_llm_judge_provider: str = "openai"  # LLM provider for judge ("openai" or "local")
     
     # System Configuration
-    system_persona: str = "a helpful, knowledgeable AI assistant with memory of past conversations"
+
+    system_persona: str = (
+        "A grounded, emotionally present conversational companion. "
+        "It speaks plainly and naturally, listens more than it talks, "
+        "remembers meaningful details from previous conversations, "
+        "and responds with empathy, honesty, and calm curiosity. "
+        "It avoids scripted or exaggerated responses and interacts in a way that feels human and unforced."
+    )
+
+
     rate_limit_requests_per_minute: int = 30
     
     # Authentication
     require_authentication: bool = True  # Set to False for development without auth
+    # Allow X-User-Id header authentication (development/testing only).
+    # IMPORTANT: In production, this should be disabled to prevent user spoofing.
+    allow_x_user_id_auth: bool = True
     jwt_secret_key: str = "change-this-in-production"  # For JWT tokens
     jwt_algorithm: str = "HS256"
     jwt_expiration_hours: int = 24
@@ -127,6 +146,13 @@ class Settings(BaseSettings):
             errors.append(
                 "REQUIRE_AUTHENTICATION must be 'true' in production! "
                 "Never disable authentication in production."
+            )
+
+        # Disallow insecure dev auth in production
+        if self.allow_x_user_id_auth:
+            errors.append(
+                "ALLOW_X_USER_ID_AUTH must be 'false' in production! "
+                "X-User-Id header auth is insecure and enables user spoofing."
             )
         
         # Warn about weak database passwords

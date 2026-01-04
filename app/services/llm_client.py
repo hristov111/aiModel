@@ -131,6 +131,10 @@ class LMStudioClient(LLMClient):
             error_msg = f"LM Studio request timed out: {e}"
             logger.error(error_msg)
             raise LLMConnectionError(error_msg)
+        except httpx.HTTPStatusError as e:
+            error_msg = f"LM Studio returned error {e.response.status_code}: {e}"
+            logger.error(error_msg)
+            raise LLMConnectionError(error_msg)
         except Exception as e:
             error_msg = f"LM Studio streaming error: {e}"
             logger.error(error_msg)
@@ -176,6 +180,10 @@ class LMStudioClient(LLMClient):
             raise LLMConnectionError(error_msg)
         except httpx.TimeoutException as e:
             error_msg = f"LM Studio request timed out: {e}"
+            logger.error(error_msg)
+            raise LLMConnectionError(error_msg)
+        except httpx.HTTPStatusError as e:
+            error_msg = f"LM Studio returned error {e.response.status_code}: {e}"
             logger.error(error_msg)
             raise LLMConnectionError(error_msg)
         except (LLMConnectionError, LLMResponseError):

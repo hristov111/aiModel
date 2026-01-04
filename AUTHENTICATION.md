@@ -6,7 +6,28 @@ The AI Companion Service now supports multi-user authentication to isolate conve
 
 The service supports three authentication methods (in order of preference):
 
-### 1. X-User-Id Header (Development/Testing)
+### 1. Authorization Bearer Token (JWT - Recommended)
+
+This is the recommended approach for any real deployment.
+
+#### Create a token (also creates the user in the DB if missing)
+
+```bash
+curl -X POST http://localhost:8000/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "alice", "expires_in_hours": 24}'
+```
+
+#### Use the token
+
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <jwt_token>" \
+  -d '{"message": "Hello!"}'
+```
+
+### 2. X-User-Id Header (Development/Testing only)
 
 **⚠️ WARNING**: This is for development only. NOT secure for production.
 
@@ -17,34 +38,23 @@ curl -X POST http://localhost:8000/chat \
   -d '{"message": "Hello!"}'
 ```
 
-### 2. X-API-Key Header (Simple API Keys)
+To disable this mechanism (recommended for production), set:
+
+```env
+ALLOW_X_USER_ID_AUTH=false
+```
+
+### 3. X-API-Key Header (Simple API Keys)
 
 Simple API key authentication. Format: `user_<user_id>_<random>`
 
 ```bash
-# Generate API key
-curl -X POST http://localhost:8000/auth/generate-key \
-  -H "X-User-Id: alice"
-
 # Use API key
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -H "X-API-Key: user_alice_a1b2c3d4e5f6" \
   -d '{"message": "Hello!"}'
 ```
-
-### 3. Authorization Bearer Token (JWT - Future)
-
-For production JWT-based authentication:
-
-```bash
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <jwt_token>" \
-  -d '{"message": "Hello!"}'
-```
-
-*Note: JWT implementation is a placeholder for future enhancement.*
 
 ## User Isolation
 
@@ -131,6 +141,7 @@ In `.env`:
 ```env
 # Authentication
 REQUIRE_AUTHENTICATION=true  # Set to false to disable auth (dev only)
+ALLOW_X_USER_ID_AUTH=true   # Dev-only; set false in production
 JWT_SECRET_KEY=your-secret-key-change-in-production
 JWT_ALGORITHM=HS256
 JWT_EXPIRATION_HOURS=24
@@ -266,7 +277,7 @@ const conversations = await client.listConversations();
 
 ### Production
 - ❌ **NEVER** use `X-User-Id` in production
-- ✅ Implement proper JWT authentication
+- ✅ Use JWT (`/auth/token` for development; protect it behind real login in production)
 - ✅ Use HTTPS only
 - ✅ Rotate JWT secret keys regularly
 - ✅ Add rate limiting per user
@@ -274,56 +285,13 @@ const conversations = await client.listConversations();
 - ✅ Hash API keys in database
 - ✅ Add API key expiration
 
-## Implementing JWT (Future Enhancement)
-
-To implement JWT authentication:
-
-1. **Install dependencies:**
-```bash
-pip install python-jose[cryptography] passlib[bcrypt]
-```
-
-2. **Update `app/core/auth.py`:**
-```python
-from jose import JWTError, jwt
-from datetime import datetime, timedelta
-
-def create_jwt_token(user_id: str) -> str:
-    """Create JWT token for user."""
-    expires = datetime.utcnow() + timedelta(hours=settings.jwt_expiration_hours)
-    payload = {
-        "sub": user_id,
-        "exp": expires,
-        "iat": datetime.utcnow()
-    }
-    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
-
-def validate_jwt_token(token: str) -> Optional[str]:
-    """Validate JWT and return user_id."""
-    try:
-        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
-        user_id = payload.get("sub")
-        return user_id
-    except JWTError:
-        return None
-```
-
-3. **Add login endpoint:**
-```python
-@router.post("/auth/login")
-async def login(username: str, password: str):
-    # Verify credentials against your user database
-    # ...
-    token = create_jwt_token(user_id)
-    return {"access_token": token, "token_type": "bearer"}
-```
-
 ## Troubleshooting
 
 ### 401 Unauthorized
 - Ensure you're providing an authentication header
 - Check header name (case-sensitive)
 - Verify user_id format
+- If using JWT, ensure the token was minted by the currently running service (JWT secret mismatch will fail)
 
 ### 404 Conversation Not Found
 - Conversation belongs to different user

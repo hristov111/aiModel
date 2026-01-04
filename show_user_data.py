@@ -75,16 +75,43 @@ async def show_user_data(external_user_id: str):
     # Create database engine
     # Check if we're running inside Docker (use postgres:5432) or outside (use localhost:5433)
     import os
+    # Allow explicit override for this utility without touching app config/.env
+    postgres_url = os.getenv("SHOW_USER_DATA_POSTGRES_URL") or os.getenv("POSTGRES_URL") or settings.postgres_url
+
     if os.path.exists('/.dockerenv'):
         # Running inside Docker container
-        postgres_url = settings.postgres_url
         print(f"{Colors.YELLOW}Running inside Docker container{Colors.END}")
     else:
         # Running on host machine
-        postgres_url = settings.postgres_url.replace('@postgres:5432/', '@localhost:5433/')
         print(f"{Colors.YELLOW}Running on host machine{Colors.END}")
-    
-    print(f"{Colors.YELLOW}Connecting to: {postgres_url.replace('postgres:postgres', 'postgres:***')}{Colors.END}")
+
+        # If this repo's dev docker-compose is present, prefer the dev DB defaults.
+        # This avoids accidental use of a production-like .env when inspecting local dev data.
+        dev_compose_path = os.path.join(os.path.dirname(__file__), "docker-compose.dev.yml")
+        if os.path.exists(dev_compose_path):
+            # Known dev defaults from docker-compose.dev.yml:
+            # - user/pass: postgres/postgres
+            # - db: ai_companion_dev
+            # - host port: 5433
+            dev_default = "postgresql+asyncpg://postgres:postgres@localhost:5433/ai_companion_dev"
+            # If current URL doesn't already target the dev DB, switch to dev default.
+            if "ai_companion_dev" not in postgres_url or "localhost:5433" not in postgres_url:
+                postgres_url = dev_default
+
+    # Mask password for display (best-effort)
+    display_url = postgres_url
+    if "://" in display_url and "@" in display_url:
+        try:
+            # postgresql+asyncpg://user:pass@host:port/db -> mask pass
+            prefix, rest = display_url.split("://", 1)
+            creds, tail = rest.split("@", 1)
+            if ":" in creds:
+                user, _pw = creds.split(":", 1)
+                display_url = f"{prefix}://{user}:***@{tail}"
+        except Exception:
+            pass
+
+    print(f"{Colors.YELLOW}Connecting to: {display_url}{Colors.END}")
     engine = create_async_engine(postgres_url, echo=False)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     

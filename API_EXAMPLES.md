@@ -14,6 +14,7 @@ http://localhost:8000
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: alice" \
   -d '{
     "message": "Hello! My name is Alice and I love Python programming."
   }'
@@ -23,10 +24,26 @@ curl -X POST http://localhost:8000/chat \
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: alice" \
   -d '{
     "message": "What do you remember about me?",
     "conversation_id": "550e8400-e29b-41d4-a716-446655440000"
   }'
+```
+
+### Create JWT (recommended) and use it
+
+```bash
+# 1) Create token (also creates the user if missing)
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"alice","expires_in_hours":24}' | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+
+# 2) Use token
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"message":"Hello from JWT!"}'
 ```
 
 ### Python Client (Streaming)
@@ -45,6 +62,7 @@ async def chat_stream(message, conversation_id=None):
             'POST',
             'http://localhost:8000/chat',
             json=payload,
+            headers={"X-User-Id": "alice"},
             timeout=60.0
         ) as response:
             print("Assistant: ", end='', flush=True)
@@ -65,7 +83,7 @@ asyncio.run(chat_stream("Tell me about AI"))
 async function chatStream(message, conversationId = null) {
   const response = await fetch('http://localhost:8000/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-User-Id': 'alice' },
     body: JSON.stringify({ 
       message, 
       conversation_id: conversationId 
@@ -105,6 +123,7 @@ chatStream("What is machine learning?");
 ```bash
 curl -X POST http://localhost:8000/conversation/reset \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: alice" \
   -d '{
     "conversation_id": "550e8400-e29b-41d4-a716-446655440000"
   }'
@@ -118,7 +137,8 @@ async def reset_conversation(conversation_id):
     async with httpx.AsyncClient() as client:
         response = await client.post(
             'http://localhost:8000/conversation/reset',
-            json={"conversation_id": conversation_id}
+            json={"conversation_id": conversation_id},
+            headers={"X-User-Id": "alice"}
         )
         return response.json()
 ```
@@ -128,6 +148,7 @@ async def reset_conversation(conversation_id):
 ```bash
 curl -X POST http://localhost:8000/memory/clear \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: alice" \
   -d '{
     "conversation_id": "550e8400-e29b-41d4-a716-446655440000"
   }'
@@ -141,7 +162,8 @@ async def clear_memories(conversation_id):
     async with httpx.AsyncClient() as client:
         response = await client.post(
             'http://localhost:8000/memory/clear',
-            json={"conversation_id": conversation_id}
+            json={"conversation_id": conversation_id},
+            headers={"X-User-Id": "alice"}
         )
         return response.json()
 ```
@@ -177,6 +199,7 @@ class AICompanionClient:
     def __init__(self, base_url="http://localhost:8000"):
         self.base_url = base_url
         self.conversation_id = None
+        self.headers = {"X-User-Id": "alice"}  # dev auth example
     
     async def chat(self, message: str) -> str:
         """Send a chat message and get streaming response."""
@@ -190,6 +213,7 @@ class AICompanionClient:
                 'POST',
                 f'{self.base_url}/chat',
                 json=payload,
+                headers=self.headers,
                 timeout=60.0
             ) as response:
                 async for line in response.aiter_lines():
@@ -213,7 +237,8 @@ class AICompanionClient:
         async with httpx.AsyncClient() as client:
             await client.post(
                 f'{self.base_url}/conversation/reset',
-                json={"conversation_id": str(self.conversation_id)}
+                json={"conversation_id": str(self.conversation_id)},
+                headers=self.headers
             )
         print("Conversation reset")
     
@@ -226,7 +251,8 @@ class AICompanionClient:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f'{self.base_url}/memory/clear',
-                json={"conversation_id": str(self.conversation_id)}
+                json={"conversation_id": str(self.conversation_id)},
+                headers=self.headers
             )
         data = response.json()
         print(f"Cleared {data['memories_cleared']} memories")
@@ -308,11 +334,13 @@ If you exceed the limit, you'll receive:
 # 1. Introduce yourself
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: bob" \
   -d '{"message": "Hi! My name is Bob and I love hiking and photography."}'
 
 # 2. Continue conversation (note the conversation_id from response)
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: bob" \
   -d '{
     "message": "I also enjoy cooking Italian food.",
     "conversation_id": "YOUR_CONVERSATION_ID"
@@ -321,6 +349,7 @@ curl -X POST http://localhost:8000/chat \
 # 3. Test memory recall
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: bob" \
   -d '{
     "message": "What do you know about my interests?",
     "conversation_id": "YOUR_CONVERSATION_ID"
@@ -332,11 +361,13 @@ curl -X POST http://localhost:8000/chat \
 # Reset conversation but keep long-term memories
 curl -X POST http://localhost:8000/conversation/reset \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: bob" \
   -d '{"conversation_id": "YOUR_CONVERSATION_ID"}'
 
 # Memory should still be recalled
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: bob" \
   -d '{
     "message": "Do you remember anything about me?",
     "conversation_id": "YOUR_CONVERSATION_ID"

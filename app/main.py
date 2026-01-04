@@ -1,5 +1,6 @@
 """FastAPI application initialization."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,6 +19,7 @@ from app.api.routes import router
 from app.core.exceptions import AICompanionException
 from app.middleware.request_id import RequestIDMiddleware
 from app.middleware.metrics import PrometheusMiddleware, get_metrics, get_metrics_content_type
+from app.services.memory_consolidation_job import memory_consolidation_loop
 
 # Configure logging
 logging.basicConfig(
@@ -34,6 +36,8 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info("Starting AI Companion Service...")
+    stop_event: asyncio.Event = asyncio.Event()
+    job_task: asyncio.Task | None = None
     
     try:
         # Initialize database connection
@@ -46,6 +50,10 @@ async def lifespan(app: FastAPI):
         logger.info(f"Embedding model loaded: {embedding_generator.dimension} dimensions")
         
         logger.info("AI Companion Service started successfully")
+
+        # Optional: periodic memory consolidation (dedup / cleanup)
+        if settings.memory_consolidation_job_enabled:
+            job_task = asyncio.create_task(memory_consolidation_loop(stop_event))
         
     except Exception as e:
         logger.error(f"Failed to start service: {e}", exc_info=True)
@@ -56,6 +64,12 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down AI Companion Service...")
     try:
+        stop_event.set()
+        if job_task:
+            try:
+                await asyncio.wait_for(job_task, timeout=10)
+            except asyncio.TimeoutError:
+                job_task.cancel()
         await close_db()
         logger.info("Database connections closed")
     except Exception as e:

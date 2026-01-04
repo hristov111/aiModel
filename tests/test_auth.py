@@ -1,5 +1,6 @@
 """Tests for authentication and JWT functionality."""
 
+import os
 import pytest
 from datetime import datetime, timedelta
 from app.core.auth import (
@@ -169,6 +170,23 @@ class TestProductionValidation:
         # Should have validation method
         assert hasattr(test_settings, 'validate_production_settings')
         assert callable(test_settings.validate_production_settings)
+
+    def test_production_disallows_x_user_id_auth(self, monkeypatch):
+        """Production should reject insecure X-User-Id authentication."""
+        from app.core.config import Settings
+
+        # Simulate production environment
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        # Satisfy other production requirements so we specifically test the X-User-Id rule
+        monkeypatch.setenv("REQUIRE_AUTHENTICATION", "true")
+        monkeypatch.setenv("JWT_SECRET_KEY", "x" * 64)
+        monkeypatch.setenv("ALLOW_X_USER_ID_AUTH", "true")
+
+        s = Settings()
+        with pytest.raises(ValueError) as exc:
+            s.validate_production_settings()
+
+        assert "ALLOW_X_USER_ID_AUTH" in str(exc.value)
 
 
 @pytest.mark.asyncio

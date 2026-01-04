@@ -312,6 +312,11 @@ class ChatApp {
                                     }
                                     break;
                                     
+                                case 'age_verification_required':
+                                    // Handle age verification required
+                                    this.handleAgeVerificationRequired(event);
+                                    break;
+                                    
                                 case 'error':
                                     this.showNotification(event.error || 'An error occurred', 'error');
                                     break;
@@ -349,6 +354,117 @@ class ChatApp {
         
         // Add thinking step to panel
         this.addThinkingStep(step, data);
+    }
+    
+    async handleAgeVerificationRequired(event) {
+        console.log('🔞 Age verification required:', event);
+        
+        // Store conversation ID
+        if (event.conversation_id) {
+            this.conversationId = event.conversation_id;
+            setConfig('CONVERSATION_ID', this.conversationId);
+            this.updateConversationDisplay();
+        }
+        
+        console.log('📝 Conversation ID:', this.conversationId);
+        
+        // Show confirmation dialog
+        const confirmed = confirm(
+            'Age Verification Required\n\n' +
+            'This content requires age verification. You must be 18 years or older to continue.\n\n' +
+            'Click OK to confirm you are 18+, or Cancel to decline.'
+        );
+        
+        console.log('✅ User confirmed:', confirmed);
+        
+        if (confirmed) {
+            try {
+                // Call age verification API
+                const apiUrl = getConfig('API_URL');
+                const userId = getConfig('USER_ID');
+                const apiKey = getConfig('API_KEY');
+                const jwtToken = getConfig('JWT_TOKEN');
+                
+                console.log('🔧 API URL:', apiUrl);
+                console.log('👤 User ID:', userId);
+                
+                const headers = {
+                    'Content-Type': 'application/json'
+                };
+                
+                // Add authentication
+                if (jwtToken) {
+                    headers['Authorization'] = `Bearer ${jwtToken}`;
+                    console.log('🔐 Using JWT token');
+                } else if (apiKey) {
+                    headers['X-API-Key'] = apiKey;
+                    console.log('🔑 Using API Key');
+                } else if (userId) {
+                    headers['X-User-Id'] = userId;
+                    console.log('👤 Using X-User-Id');
+                }
+                
+                console.log('📤 Calling age verification API...');
+                
+                const response = await fetch(`${apiUrl}/content/age-verify`, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        conversation_id: this.conversationId,
+                        confirmed: true
+                    })
+                });
+                
+                console.log('📥 Response status:', response.status);
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('❌ API error:', errorText);
+                    throw new Error(`Failed to verify age: ${response.statusText} - ${errorText}`);
+                }
+                
+                const result = await response.json();
+                console.log('✅ Age verification result:', result);
+                
+                if (result.age_verified) {
+                    this.showNotification('Age verified! You can now send your message again.', 'success');
+                    
+                    // Show message in assistant area
+                    const message = 'Age verified successfully. Please send your message again to continue.';
+                    if (this.currentMessageElement) {
+                        this.finalizeAssistantMessage(message);
+                    } else {
+                        this.addMessage('assistant', message);
+                    }
+                } else {
+                    this.showNotification('Age verification failed', 'error');
+                    if (this.currentMessageElement) {
+                        this.currentMessageElement.remove();
+                        this.currentMessageElement = null;
+                    }
+                }
+                
+            } catch (error) {
+                console.error('❌ Age verification error:', error);
+                this.showNotification(`Age verification error: ${error.message}`, 'error');
+                if (this.currentMessageElement) {
+                    this.currentMessageElement.remove();
+                    this.currentMessageElement = null;
+                }
+            }
+        } else {
+            // User declined
+            console.log('❌ User declined age verification');
+            this.showNotification('Age verification declined. Content cannot be displayed.', 'error');
+            
+            // Show message in assistant area
+            const message = 'Age verification is required to access this content. Please confirm you are 18+ years old to continue.';
+            if (this.currentMessageElement) {
+                this.finalizeAssistantMessage(message);
+            } else {
+                this.addMessage('assistant', message);
+            }
+        }
     }
     
     addThinkingStep(step, data) {

@@ -11,7 +11,7 @@ from app.models.memory import Message
 from app.services.short_term_memory import ConversationBuffer
 from app.services.long_term_memory import LongTermMemoryService
 from app.services.prompt_builder import PromptBuilder
-from app.services.llm_client import LLMClient, get_llm_client
+from app.services.llm_client import LLMClient, get_llm_client, OpenAIClient
 from app.services.user_preference_service import UserPreferenceService
 from app.services.emotion_service import EmotionService
 from app.services.personality_service import PersonalityService
@@ -377,6 +377,13 @@ class ChatService:
             logger.info("Parallel detections completed")
             
             # ==========================================
+            # FIX: Use detected personality immediately
+            # ==========================================
+            # If personality was just detected, use it instead of loaded
+            # (prevents race condition where old personality is used for current response)
+            final_personality_config = personality_config_detected or personality_config
+            
+            # ==========================================
             # EMIT DETECTION RESULTS
             # ==========================================
             
@@ -394,16 +401,16 @@ class ChatService:
                     "timestamp": datetime.utcnow().isoformat()
                 }
             
-            # Emit personality config
-            if personality_config:
+            # Emit personality config (use final personality)
+            if final_personality_config:
                 yield {
                     "type": "thinking",
                     "step": "personality_loaded",
                     "data": {
                         "message": "Applied personality configuration",
-                        "archetype": personality_config.get('archetype'),
+                        "archetype": final_personality_config.get('archetype'),
                         "relationship_depth": relationship_state.get('relationship_depth_score', 0) if relationship_state else 0,
-                        "traits": personality_config.get('traits', {})
+                        "traits": final_personality_config.get('traits', {})
                     },
                     "conversation_id": str(conversation_id),
                     "timestamp": datetime.utcnow().isoformat()
@@ -492,15 +499,16 @@ class ChatService:
             }
             
             # Step 9: Build complete prompt with GOALS + PERSONALITY + EMOTION AWARENESS + HARD PREFERENCE ENFORCEMENT
+            # Use final_personality_config (detected or loaded) for immediate application
             system_prompt = self.prompt_builder.build_system_prompt(
                 relevant_memories=relevant_memories,
                 conversation_summary=conversation_summary,
-                user_preferences=user_preferences,      # HARD ENFORCEMENT
-                detected_emotion=detected_emotion,       # EMOTION AWARENESS
-                emotion_context=emotion_context,         # EMOTION TRENDS
-                personality_config=personality_config,   # PERSONALITY TRAITS
-                relationship_state=relationship_state,   # RELATIONSHIP CONTEXT
-                goal_context=goal_context                # GOALS TRACKING
+                user_preferences=user_preferences,           # HARD ENFORCEMENT
+                detected_emotion=detected_emotion,            # EMOTION AWARENESS
+                emotion_context=emotion_context,              # EMOTION TRENDS
+                personality_config=final_personality_config,  # PERSONALITY TRAITS (immediate)
+                relationship_state=relationship_state,        # RELATIONSHIP CONTEXT
+                goal_context=goal_context                     # GOALS TRACKING
             )
             
             # Get messages except the current user message (it will be added separately)
@@ -512,12 +520,12 @@ class ChatService:
                 current_user_message=user_message
             )
             
-            # Emit prompt built
+            # Emit prompt built (use final personality for accurate reporting)
             context_summary = {
                 "memories": len(relevant_memories),
                 "messages": len(history_messages),
                 "preferences": user_preferences is not None,
-                "personality": personality_config.get('archetype') if personality_config else None,
+                "personality": final_personality_config.get('archetype') if final_personality_config else None,
                 "emotion": detected_emotion.get('emotion') if detected_emotion else None,
                 "goals": len(goal_context.get('active_goals', [])) if goal_context else 0
             }
@@ -539,7 +547,7 @@ class ChatService:
             journey.log_prompt_built(
                 len(relevant_memories),
                 len(recent_messages),
-                personality_config is not None,
+                final_personality_config is not None,
                 detected_emotion is not None
             )
             
@@ -572,102 +580,43 @@ class ChatService:
             # Get or create session FIRST (before classification)
             session = session_manager.get_session(conversation_id, user_db_id or conversation_id)
             
-            # Check if route is locked (continuing explicit conversation)
-            if session_manager.is_route_locked(conversation_id):
-                route = session_manager.get_current_route(conversation_id)
-                
-                # Create a mock classification for locked route
-                # This maintains compatibility with audit logging
-                if route == ModelRoute.EXPLICIT:
-                    label = ContentLabel.EXPLICIT_CONSENSUAL_ADULT
-                elif route == ModelRoute.FETISH:
-                    label = ContentLabel.EXPLICIT_FETISH
-                elif route == ModelRoute.ROMANCE:
-                    label = ContentLabel.SUGGESTIVE
-                else:
-                    label = ContentLabel.SAFE
-                
-                classification = ClassificationResult(
-                    label=label,
-                    confidence=1.0,  # High confidence since we're locked in
-                    reasoning="Route locked - continuing explicit conversation context"
-                )
-                
-                logger.info(
-                    f"Route locked to {route.value} "
-                    f"({session.route_lock_message_count} messages remaining) - "
-                    f"skipping classification"
-                )
-            else:
-                # Normal flow: Classify content
-                classification = classifier.classify(user_message)
-                logger.info(
-                    f"Content classified: {classification.label.value} "
-                    f"(confidence: {classification.confidence:.2f})"
-                )
-                
-                # Determine route from classification
-                route = router.route(classification)
-            
-            # Check if this is an age verification response
-            # Detect "yes", "y", "confirm", "i am 18", "18+" etc.
-            age_confirmation_patterns = [
-                r'\b(yes|yea|yeah|yep|y)\b',
-                r'\b(i am|im|i\'m)\s*(18|over 18|above 18|18\+)',
-                r'\b(confirm|confirmed|i confirm)\b',
-                r'\b(18|eighteen)\s*(years old|years|yo|\+)',
-            ]
-            is_age_confirmation = any(
-                re.search(pattern, user_message.lower()) 
-                for pattern in age_confirmation_patterns
+            # ALWAYS classify content (even if route is locked)
+            # This allows SAFE content to break out of explicit mode
+            classification = classifier.classify(user_message)
+            logger.info(
+                f"Content classified: {classification.label.value} "
+                f"(confidence: {classification.confidence:.2f})"
             )
             
-            # If user is confirming age and session has explicit attempts, verify them
-            if is_age_confirmation and session.explicit_attempts_without_verification > 0:
-                logger.info(f"Age confirmation detected: '{user_message}' - verifying user")
-                session_manager.verify_age(conversation_id)
-                
-                # Log audit
-                audit_logger.log_classification(
-                    conversation_id=conversation_id,
-                    user_id=user_db_id or conversation_id,
-                    original_text=user_message,
-                    classification=classification,
-                    route=ModelRoute.NORMAL,
-                    route_locked=False,
-                    age_verified=True,
-                    action="age_verified",
-                    session_info={"confirmation_message": user_message}
-                )
-                
-                # Confirm age verification
-                yield {
-                    "type": "thinking",
-                    "step": "age_verified",
-                    "data": {"message": "Age verified successfully"},
-                    "conversation_id": str(conversation_id),
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-                
-                confirmation_msg = "Thank you for confirming. You can now ask your question again."
-                for chunk in confirmation_msg:
-                    yield {
-                        "type": "chunk",
-                        "chunk": chunk,
-                        "conversation_id": str(conversation_id)
-                    }
-                
-                yield {
-                    "type": "done",
-                    "conversation_id": str(conversation_id),
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-                return
+            # Determine route from classification
+            route = router.route(classification)
             
+            # Check if route is locked and should stay locked
+            if session_manager.is_route_locked(conversation_id):
+                locked_route = session_manager.get_current_route(conversation_id)
+                
+                # If new content is also explicit, stay locked
+                if route in (ModelRoute.EXPLICIT, ModelRoute.FETISH, ModelRoute.ROMANCE):
+                    route = locked_route  # Keep the locked route
+                    logger.info(
+                        f"Route locked to {locked_route.value} "
+                        f"({session.route_lock_message_count} messages remaining) - "
+                        f"continuing explicit conversation"
+                    )
+                else:
+                    # New content is SAFE - break the lock!
+                    logger.info(
+                        f"Breaking route lock: user switched from {locked_route.value} to SAFE content "
+                        f"(was locked for {session.route_lock_message_count} more messages)"
+                    )
+                    # Clear the lock by setting count to 0
+                    session.route_lock_message_count = 0
+            
+            # Age verification is now handled by frontend popup via API endpoint
+            # No need to detect "yes" in chat anymore
             # Check if age verification is required
             if session_manager.requires_age_verification(conversation_id, route):
                 attempt_count = session_manager.track_explicit_attempt(conversation_id)
-                age_prompt = session_manager.get_age_verification_prompt(attempt_count)
                 
                 logger.warning(
                     f"Age verification required for {route} "
@@ -683,25 +632,23 @@ class ChatService:
                     route=route,
                     route_locked=session_manager.is_route_locked(conversation_id),
                     age_verified=False,
-                    action="age_verify",
+                    action="age_verify_required",
                     session_info={"attempt_count": attempt_count}
                 )
                 
-                # Return age verification prompt
+                # Return age verification required event
+                # Frontend should show age confirmation popup
                 yield {
-                    "type": "thinking",
-                    "step": "age_verification_required",
-                    "data": {"message": "Age verification required"},
+                    "type": "age_verification_required",
                     "conversation_id": str(conversation_id),
+                    "data": {
+                        "message": "Age verification required to access this content",
+                        "route": route.value,
+                        "api_endpoint": "/content/age-verify",
+                        "instructions": "Please confirm you are 18+ years old to continue"
+                    },
                     "timestamp": datetime.utcnow().isoformat()
                 }
-                
-                for chunk in age_prompt:
-                    yield {
-                        "type": "chunk",
-                        "chunk": chunk,
-                        "conversation_id": str(conversation_id)
-                    }
                 
                 yield {
                     "type": "done",
@@ -822,18 +769,74 @@ class ChatService:
             full_response = []
             chunk_count = 0
             
-            async for chunk in active_llm_client.stream_chat(messages):
-                full_response.append(chunk)
-                chunk_count += 1
-                journey.log_streaming_chunk(chunk_count)
-                yield {
-                    "type": "chunk",
-                    "chunk": chunk,
-                    "conversation_id": str(conversation_id)
-                }
-            
-            assistant_response = "".join(full_response)
-            logger.info(f"{model_name} generated {len(assistant_response)} chars")
+            try:
+                async for chunk in active_llm_client.stream_chat(messages):
+                    full_response.append(chunk)
+                    chunk_count += 1
+                    journey.log_streaming_chunk(chunk_count)
+                    yield {
+                        "type": "chunk",
+                        "chunk": chunk,
+                        "conversation_id": str(conversation_id)
+                    }
+                
+                assistant_response = "".join(full_response)
+                logger.info(f"{model_name} generated {len(assistant_response)} chars")
+                
+            except LLMConnectionError as e:
+                # If local model fails, attempt fallback to OpenAI with safety warning
+                if route in (ModelRoute.EXPLICIT, ModelRoute.FETISH):
+                    logger.warning(
+                        f"Local model connection failed for {route}, falling back to OpenAI: {e}"
+                    )
+                    
+                    # Emit warning to user
+                    yield {
+                        "type": "thinking",
+                        "step": "model_fallback",
+                        "data": {
+                            "message": "Local model unavailable, using fallback model with safety restrictions"
+                        },
+                        "conversation_id": str(conversation_id),
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                    
+                    # Use OpenAI as fallback with modified prompt
+                    fallback_client = OpenAIClient(
+                        model_name=settings.openai_model_name,
+                        temperature=0.7,
+                        max_tokens=2000
+                    )
+                    
+                    # Modify system prompt to be safer (OpenAI has content filters)
+                    fallback_prompt = """You are a helpful AI assistant. Be respectful and maintain appropriate boundaries. 
+Note: Explicit content may be limited due to content policy restrictions."""
+                    
+                    if messages and messages[0]["role"] == "system":
+                        messages[0]["content"] = fallback_prompt
+                    
+                    # Try streaming with fallback client
+                    try:
+                        async for chunk in fallback_client.stream_chat(messages):
+                            full_response.append(chunk)
+                            chunk_count += 1
+                            journey.log_streaming_chunk(chunk_count)
+                            yield {
+                                "type": "chunk",
+                                "chunk": chunk,
+                                "conversation_id": str(conversation_id)
+                            }
+                        
+                        assistant_response = "".join(full_response)
+                        logger.info(f"Fallback model generated {len(assistant_response)} chars")
+                        
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback model also failed: {fallback_error}")
+                        raise  # Re-raise to be caught by outer exception handler
+                else:
+                    # For non-explicit routes, just re-raise the error
+                    logger.error(f"LLM connection failed for {route}: {e}")
+                    raise
             
             # Step 11: Store assistant response in short-term memory
             self.conversation_buffer.add_message(

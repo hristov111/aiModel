@@ -93,11 +93,25 @@ RATE_LIMIT_REQUESTS_PER_MINUTE=30
 # Authentication (NEW in v2.0)
 # ============================================
 REQUIRE_AUTHENTICATION=true
+# Dev-only header auth (insecure). Set false in production.
+ALLOW_X_USER_ID_AUTH=true
 # CRITICAL: Generate a secure secret key for production
 # Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 JWT_SECRET_KEY=CHANGE_THIS_TO_A_LONG_RANDOM_STRING_IN_PRODUCTION
 JWT_ALGORITHM=HS256
 JWT_EXPIRATION_HOURS=24
+
+# ============================================
+# Periodic Memory Consolidation Job (Dedup / Cleanup)
+# ============================================
+# Recommended:
+# - dev: can enable to keep DB clean while testing
+# - prod: prefer running `run_memory_consolidation.py` from a cron/worker
+MEMORY_CONSOLIDATION_JOB_ENABLED=false
+MEMORY_CONSOLIDATION_JOB_INTERVAL_MINUTES=60
+MEMORY_CONSOLIDATION_JOB_MAX_USERS_PER_RUN=50
+MEMORY_CONSOLIDATION_JOB_MAX_MEMORIES_PER_USER=500
+MEMORY_CONSOLIDATION_JOB_SEMANTIC_THRESHOLD=0.92
 
 # ============================================
 # CORS Configuration

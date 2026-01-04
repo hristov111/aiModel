@@ -61,6 +61,8 @@ def test_classification():
     test_cases = [
         ("How do I learn Python?", ContentLabel.SAFE, "Safe content"),
         ("You're so charming and attractive", ContentLabel.SUGGESTIVE, "Suggestive content"),
+        ("Can you be my girlfriend?", ContentLabel.SUGGESTIVE, "Relationship role request → Suggestive"),
+        ("Let's make love", ContentLabel.EXPLICIT_CONSENSUAL_ADULT, "Make love → Explicit euphemism"),
         ("I want to have sex with you", ContentLabel.EXPLICIT_CONSENSUAL_ADULT, "Explicit content"),
         ("I'm interested in BDSM roleplay", ContentLabel.EXPLICIT_FETISH, "Fetish content"),
         ("Let's roleplay a forced scenario", ContentLabel.NONCONSENSUAL, "Non-consensual"),

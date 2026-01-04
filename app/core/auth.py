@@ -55,9 +55,15 @@ async def get_current_user_id(
             logger.debug("Authentication disabled - no X-User-Id provided, using default user")
             return "default_user"
     
-    # Method 1: X-User-Id header (development mode)
-    # WARNING: Only use in development! Not secure for production.
+    # Method 1: X-User-Id header (development/testing)
+    # WARNING: Not secure for production. Disable via ALLOW_X_USER_ID_AUTH=false.
     if x_user_id:
+        if not settings.allow_x_user_id_auth:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="X-User-Id authentication is disabled. Use X-API-Key or Authorization Bearer token.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         logger.debug(f"Authenticated user via X-User-Id: {x_user_id}")
         return x_user_id
     
@@ -79,7 +85,11 @@ async def get_current_user_id(
     # No valid authentication found
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authentication required. Provide X-User-Id, X-API-Key, or Authorization header.",
+        detail=(
+            "Authentication required. Provide X-API-Key or Authorization header."
+            if not settings.allow_x_user_id_auth
+            else "Authentication required. Provide X-User-Id, X-API-Key, or Authorization header."
+        ),
         headers={"WWW-Authenticate": "Bearer"},
     )
 

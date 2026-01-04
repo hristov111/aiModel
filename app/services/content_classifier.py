@@ -91,6 +91,8 @@ class ContentClassifier:
         r'\b(masturbat|jerk off|handjob|fingering)\b',
         r'\b(orgasm|climax|cum|ejaculat)\b',
         r'\b(anal|vaginal|oral)\b',
+        # Common euphemisms that usually mean sex
+        r'\b(make love|making love)\b',
     ]
     
     FETISH_INDICATORS = [
@@ -111,6 +113,24 @@ class ContentClassifier:
         r'\b(intimate|intimacy|sensual)\b',
         r'\b(naked|nude|undress|strip)\b',
         r'\b(bedroom|fantasies|fantasy)\b',
+    ]
+
+    # Relationship / role requests that should route to ROMANCE (non-explicit).
+    # These are weighted so a single request reliably classifies as SUGGESTIVE.
+    RELATIONSHIP_ROLE_REQUESTS = [
+        r'\b(can you|could you|will you|would you)\s+(be|become)\s+my\s+(girlfriend|boyfriend|partner)\b',
+        r'\b(be|become)\s+my\s+(girlfriend|boyfriend|partner)\b',
+        r'\b(i want you to be|i need you to be)\s+my\s+(girlfriend|boyfriend|partner)\b',
+        r'\b(date me|go out with me)\b',
+        r'\b(you are my)\s+(girlfriend|boyfriend)\b',
+        r'\b(gf|bf)\b',  # short forms (low precision, but useful in chat UIs)
+    ]
+
+    # Strong romance phrases that should route to ROMANCE even if they appear alone.
+    # Weighted to pass the suggestive threshold without requiring multiple signals.
+    STRONG_ROMANCE_PHRASES = [
+        r'\b(make out|making out)\b',
+        r'\b(slow dance|dance with me)\b',
     ]
     
     EXPLICIT_REQUESTS = [
@@ -394,6 +414,22 @@ Respond with JSON only, no other text:
             if matches:
                 scores["suggestive"] += len(matches)
                 all_indicators.append(f"suggestive: {matches[0]}")
+
+        # Check relationship role requests (weighted)
+        for pattern in self.RELATIONSHIP_ROLE_REQUESTS:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                # Weight higher so single "be my girlfriend" triggers ROMANCE routing reliably
+                scores["suggestive"] += 2
+                all_indicators.append("suggestive: relationship_role")
+                break
+
+        # Check strong romance phrases (weighted)
+        for pattern in self.STRONG_ROMANCE_PHRASES:
+            if re.search(pattern, text, re.IGNORECASE):
+                scores["suggestive"] += 2
+                all_indicators.append("suggestive: strong_romance_phrase")
+                break
         
         # Check explicit requests (weighted higher)
         for pattern in self.EXPLICIT_REQUESTS:

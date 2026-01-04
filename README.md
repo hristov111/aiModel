@@ -170,7 +170,20 @@ All API endpoints require authentication. See [AUTHENTICATION.md](AUTHENTICATION
 curl -H "X-User-Id: your-user-id" ...
 ```
 
-**Production:** Implement JWT authentication (see AUTHENTICATION.md)
+**Recommended (JWT):**
+
+```bash
+# 1) Create token (also creates the user in DB if missing)
+curl -X POST http://localhost:8000/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"your-user-id","expires_in_hours":24}'
+
+# 2) Use it on /chat
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"message":"Hello!"}'
+```
 
 ## API Endpoints
 
@@ -181,6 +194,7 @@ Stream chat responses with memory integration:
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
+  -H "X-User-Id: alice" \
   -d '{
     "message": "Hello, my name is Alice and I love programming",
     "conversation_id": null
