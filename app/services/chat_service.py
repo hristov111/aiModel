@@ -505,9 +505,10 @@ class ChatService:
             # ALWAYS build the full prompt with memories, preferences, emotions, goals
             # If custom system_prompt provided (e.g., from persona selection), use it as BASE but ADD memories
             if system_prompt is not None:
-                # Custom persona-based system prompt provided - use as base persona
+                # Custom persona-based system prompt provided (like Elara)
+                # Use the custom prompt as the persona, but DON'T pass personality_config
+                # (otherwise it would override the custom persona)
                 logger.info("Using custom persona system prompt WITH memory injection")
-                # Build full context prompt with custom persona as base
                 temp_builder = PromptBuilder(persona=system_prompt)
                 built_system_prompt = temp_builder.build_system_prompt(
                     relevant_memories=relevant_memories,
@@ -515,7 +516,7 @@ class ChatService:
                     user_preferences=user_preferences,           # HARD ENFORCEMENT
                     detected_emotion=detected_emotion,            # EMOTION AWARENESS
                     emotion_context=emotion_context,              # EMOTION TRENDS
-                    personality_config=final_personality_config,  # PERSONALITY TRAITS (immediate)
+                    personality_config=None,                      # Don't override custom persona!
                     relationship_state=relationship_state,        # RELATIONSHIP CONTEXT
                     goal_context=goal_context                     # GOALS TRACKING
                 )
