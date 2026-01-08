@@ -34,18 +34,19 @@ OPENAI_TEMPERATURE=0.7
 OPENAI_MAX_TOKENS=2000
 
 # ============================================
-# LM Studio Configuration (Local Model for Explicit Content)
+# LM Studio Configuration (Local/Hybrid Deployment)
 # ============================================
 # For Docker: Use host.docker.internal instead of localhost
 # For host machine: Use localhost
+# Used for explicit content (privacy) or as fallback
 LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1
 # LM_STUDIO_BASE_URL=http://localhost:1234/v1  # Uncomment for non-Docker
 LM_STUDIO_MODEL_NAME=local-model
-LM_STUDIO_TEMPERATURE=0.7
-LM_STUDIO_MAX_TOKENS=2000
+LM_STUDIO_TEMPERATURE=0.8
+LM_STUDIO_MAX_TOKENS=2000  # IMPORTANT: Don't set lower than 500!
 
 # VPS API Authorization (if using remote LLM server)
-VPS_API_KEY=your-secret-api-key-here
+VPS_API_KEY=
 
 # ============================================
 # Database Configuration
@@ -65,8 +66,10 @@ POSTGRES_URL=postgresql+asyncpg://postgres:changeme_in_production@postgres:5432/
 # POSTGRES_URL=postgresql+asyncpg://postgres:changeme_in_production@localhost:5433/ai_companion
 
 # Connection pool settings
+# Development (1-50 users):
 POSTGRES_POOL_SIZE=10
 POSTGRES_MAX_OVERFLOW=20
+# Production (100+ users): Increase to POOL_SIZE=30, MAX_OVERFLOW=50
 
 # ============================================
 # Embedding Configuration
@@ -79,14 +82,40 @@ EMBEDDING_DIMENSION=384
 # ============================================
 SHORT_TERM_MEMORY_SIZE=10
 LONG_TERM_MEMORY_TOP_K=5
-# Lower threshold (0.3) improves memory recall; raise to 0.5-0.7 for stricter matching
-MEMORY_SIMILARITY_THRESHOLD=0.3
+# Lower threshold (0.15-0.3) improves memory recall; raise to 0.5-0.7 for stricter matching
+MEMORY_SIMILARITY_THRESHOLD=0.15
 MEMORY_EXTRACTION_MIN_TURNS=3
+# Options: "llm" (uses LLM for extraction), "heuristic" (rules-based), "hybrid" (both)
+MEMORY_EXTRACTION_METHOD=hybrid
+
+# ============================================
+# AI Detection Methods (Hybrid Architecture)
+# ============================================
+# Options for all: "llm" (accurate but slow/costly), "pattern" (fast but simple), "hybrid" (recommended)
+EMOTION_DETECTION_METHOD=hybrid
+GOAL_DETECTION_METHOD=hybrid
+PERSONALITY_DETECTION_METHOD=hybrid
+MEMORY_CATEGORIZATION_METHOD=hybrid
+CONTRADICTION_DETECTION_METHOD=hybrid
+
+# ============================================
+# Content Classification & Routing
+# ============================================
+# Enable intelligent content routing based on classification
+CONTENT_ROUTING_ENABLED=true
+CONTENT_AUDIT_LOG_FILE=content_audit.log
+SESSION_TIMEOUT_HOURS=24
+ROUTE_LOCK_MESSAGE_COUNT=5  # Stay in explicit mode for N messages
+
+# Layer 4: LLM Judge for borderline content classification
+CONTENT_LLM_JUDGE_ENABLED=true
+CONTENT_LLM_JUDGE_THRESHOLD=0.7  # Use LLM if pattern confidence below this
+CONTENT_LLM_JUDGE_PROVIDER=openai  # Options: "openai" or "local"
 
 # ============================================
 # System Configuration
 # ============================================
-SYSTEM_PERSONA=a helpful, knowledgeable AI assistant with memory of past conversations
+SYSTEM_PERSONA=A grounded, emotionally present conversational companion. It speaks plainly and naturally, listens more than it talks, remembers meaningful details from previous conversations, and responds with empathy, honesty, and calm curiosity. It avoids scripted or exaggerated responses and interacts in a way that feels human and unforced.
 RATE_LIMIT_REQUESTS_PER_MINUTE=30
 
 # ============================================
@@ -120,10 +149,15 @@ MEMORY_CONSOLIDATION_JOB_SEMANTIC_THRESHOLD=0.92
 CORS_ORIGINS=http://localhost:3000,http://localhost:8080
 
 # ============================================
-# Redis Configuration (Recommended for Production)
+# Redis Configuration (CRITICAL for Production Scaling)
 # ============================================
-# Enable Redis for distributed short-term memory across multiple instances
-REDIS_ENABLED=true
+# IMPORTANT: Enable Redis for:
+#  - Horizontal scaling (multiple app instances)
+#  - Session persistence across instances
+#  - Better performance and reliability
+# Disable only for single-instance development
+
+REDIS_ENABLED=true  # Set to false for local dev without Redis
 REDIS_PASSWORD=changeme_in_production
 REDIS_PORT=6379
 
@@ -132,6 +166,8 @@ REDIS_PORT=6379
 REDIS_URL=redis://:changeme_in_production@redis:6379/0
 # Host machine:
 # REDIS_URL=redis://:changeme_in_production@localhost:6379/0
+# No password (dev only):
+# REDIS_URL=redis://localhost:6379/0
 
 # ============================================
 # Monitoring & Observability
@@ -168,4 +204,40 @@ NGINX_HTTPS_PORT=443
 # ============================================
 # Automatically run database migrations on startup
 RUN_MIGRATIONS=true
+
+# =============================================================================
+# PRODUCTION DEPLOYMENT CHECKLIST
+# =============================================================================
+# Before launching to production, complete these steps:
+#
+# 1. CRITICAL SECURITY (Must Do):
+#    - Set ENVIRONMENT=production
+#    - Generate secure JWT_SECRET_KEY (32+ characters)
+#    - Set ALLOW_X_USER_ID_AUTH=false
+#    - Change all passwords (POSTGRES, REDIS)
+#    - Set strong OPENAI_API_KEY
+#    - Configure CORS_ORIGINS with your domain
+#
+# 2. PERFORMANCE (Recommended):
+#    - Set REDIS_ENABLED=true
+#    - Increase POSTGRES_POOL_SIZE=30
+#    - Increase POSTGRES_MAX_OVERFLOW=50
+#    - Set LM_STUDIO_MAX_TOKENS=2000
+#
+# 3. MONITORING (Recommended):
+#    - Enable Prometheus metrics at /metrics
+#    - Set LOG_LEVEL=INFO or WARNING
+#    - Configure external monitoring
+#
+# 4. INFRASTRUCTURE:
+#    - Use HTTPS/TLS (nginx reverse proxy)
+#    - Configure automated backups
+#    - Set up database read replicas (for 500+ users)
+#    - Enable auto-scaling (Kubernetes)
+#
+# Generate secrets:
+#   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+#
+# See PRODUCTION_OPTIMIZATION_REPORT.md for full deployment guide
+# =============================================================================
 

@@ -1,0 +1,201 @@
+═══════════════════════════════════════════════════════════════════════════════
+  AI COMPANION SERVICE - QUICK START CARD
+  For colleagues cloning from GitHub
+═══════════════════════════════════════════════════════════════════════════════
+
+📋 WHAT'S MISSING FROM GITHUB (You need to create/install):
+═══════════════════════════════════════════════════════════════════════════════
+
+  🔴 CRITICAL - Create manually:
+     • .env file (copy from ENV_EXAMPLE.txt and edit)
+  
+  🟡 AUTO-GENERATED - Will be created during setup:
+     • venv/ (Python virtual environment)
+     • __pycache__/ (Python cache)
+     • logs/ (application logs)
+     • ~/.cache/huggingface/ (ML models, ~90MB download)
+
+
+🚀 5-MINUTE SETUP (For those who know what they're doing):
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Install prerequisites:
+   • Python 3.11+
+   • Docker (for PostgreSQL)
+   • LM Studio (download from lmstudio.ai)
+
+2. Start PostgreSQL:
+   docker run -d --name ai-companion-db \
+     -e POSTGRES_PASSWORD=changeme_in_production \
+     -e POSTGRES_DB=ai_companion -p 5433:5432 \
+     pgvector/pgvector:pg15
+
+3. Start LM Studio:
+   • Open LM Studio → Download a model → Start Server
+
+4. Setup project:
+   git clone <repo-url> ai-service && cd ai-service
+   python3 -m venv venv && source venv/bin/activate
+   pip install -r requirements.txt
+   cp ENV_EXAMPLE.txt .env
+   # Edit .env - minimum required: LM_STUDIO_BASE_URL, POSTGRES_URL, JWT_SECRET_KEY
+   alembic upgrade head
+   python -m uvicorn app.main:app --reload
+
+5. Test:
+   curl http://localhost:8000/health
+
+
+📝 MINIMUM .env FILE (Edit these lines in your .env):
+═══════════════════════════════════════════════════════════════════════════════
+
+ENVIRONMENT=development
+
+# LM Studio (REQUIRED)
+LM_STUDIO_BASE_URL=http://localhost:1234/v1
+LM_STUDIO_MODEL_NAME=local-model
+
+# Database (REQUIRED)
+POSTGRES_URL=postgresql+asyncpg://postgres:changeme_in_production@localhost:5433/ai_companion
+POSTGRES_PASSWORD=changeme_in_production
+
+# Auth (REQUIRED - generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+JWT_SECRET_KEY=CHANGE_THIS_TO_A_LONG_RANDOM_STRING_IN_PRODUCTION
+ALLOW_X_USER_ID_AUTH=true
+
+# OpenAI (OPTIONAL - can leave empty for dev)
+OPENAI_API_KEY=
+
+# Redis (OPTIONAL - set false for local dev)
+REDIS_ENABLED=false
+
+
+🔧 TROUBLESHOOTING QUICK FIXES:
+═══════════════════════════════════════════════════════════════════════════════
+
+Problem                         Solution
+───────────────────────────────────────────────────────────────────────────────
+LM Studio connection failed     • Open LM Studio → Server tab → Start Server
+                               • curl http://localhost:1234/v1/models
+
+Database connection failed      • docker ps | grep ai-companion-db
+                               • Check POSTGRES_URL in .env matches port 5433
+
+Module not found error         • source venv/bin/activate
+                               • pip install -r requirements.txt
+
+Port 8000 in use              • sudo lsof -i :8000
+                               • kill -9 <PID>
+                               • Or use: uvicorn app.main:app --port 8001
+
+Migration error               • alembic upgrade head
+                               • If fails: Drop DB and recreate
+
+
+📚 FULL DOCUMENTATION FILES:
+═══════════════════════════════════════════════════════════════════════════════
+
+  COLLEAGUE_SETUP_GUIDE.md       ← Complete detailed setup guide (START HERE)
+  MISSING_FILES_CHECKLIST.md     ← What files are missing from GitHub
+  README.md                      ← Project overview and architecture
+  API_EXAMPLES.md                ← API usage examples
+  ENV_EXAMPLE.txt                ← Complete environment variable reference
+
+
+✅ VERIFICATION CHECKLIST:
+═══════════════════════════════════════════════════════════════════════════════
+
+□ PostgreSQL running: docker ps | grep ai-companion-db
+□ LM Studio server running: curl http://localhost:1234/v1/models
+□ Virtual env activated: which python  (should show venv/bin/python)
+□ Dependencies installed: pip list | grep fastapi
+□ .env file created: ls -la .env
+□ Database migrated: alembic current
+□ Service running: curl http://localhost:8000/health
+□ API docs accessible: http://localhost:8000/docs
+
+
+🔑 QUICK COMMANDS:
+═══════════════════════════════════════════════════════════════════════════════
+
+# Activate virtual environment
+source venv/bin/activate
+
+# Start service
+python -m uvicorn app.main:app --reload
+
+# Check health
+curl http://localhost:8000/health
+
+# Test chat
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: test-user" \
+  -d '{"message": "Hello!"}'
+
+# Create JWT token
+curl -X POST http://localhost:8000/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"your-id","expires_in_hours":24}'
+
+# Generate secure secret
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+
+# Run migrations
+alembic upgrade head
+
+# Run tests
+pytest tests/ -v
+
+
+🆘 GET HELP:
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Read COLLEAGUE_SETUP_GUIDE.md (detailed troubleshooting section)
+2. Check application logs: tail -f logs/app.log
+3. Check Docker logs: docker logs ai-companion-db
+4. Review .env configuration
+5. Contact team: [Add your contact here]
+
+
+📦 SYSTEM REQUIREMENTS:
+═══════════════════════════════════════════════════════════════════════════════
+
+• Python 3.11+
+• PostgreSQL 15+ with pgvector (via Docker)
+• Docker 20.10+ (recommended)
+• LM Studio (latest version)
+• 8GB RAM minimum
+• 20GB disk space (for models and data)
+• Linux/macOS/Windows (WSL2)
+
+
+💾 STORAGE BREAKDOWN:
+═══════════════════════════════════════════════════════════════════════════════
+
+venv/                    ~500MB-1GB
+ML models cache          ~200MB (one-time download)
+Docker PostgreSQL        Growing (depends on usage)
+Docker images            ~500MB
+LM Studio models         2-15GB (depends on model chosen)
+───────────────────────────────────────────────────────────────────────────────
+Total Initial:           ~3-5GB minimum
+
+
+🎯 SUCCESS CRITERIA:
+═══════════════════════════════════════════════════════════════════════════════
+
+You're good to go when:
+✓ curl http://localhost:8000/health returns {"status":"healthy"}
+✓ http://localhost:8000/docs shows API documentation
+✓ Chat endpoint returns streaming responses
+✓ Tests pass (optional): pytest tests/ -v
+
+
+═══════════════════════════════════════════════════════════════════════════════
+Last Updated: 2025-01-04 | Version: 1.0.0
+═══════════════════════════════════════════════════════════════════════════════
+
+
+
+

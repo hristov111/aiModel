@@ -1,0 +1,28 @@
+# =============================================================================
+# Adminer - Database Visualization Tool
+# =============================================================================
+# Run with: docker compose -f docker-compose.dev.yml -f docker-compose.adminer.yml up -d
+# Access at: http://localhost:8080
+
+version: '3.8'
+
+services:
+  adminer:
+    image: adminer:latest
+    container_name: ai_companion_adminer
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: nette
+    networks:
+      - ai_network_dev
+    restart: unless-stopped
+    depends_on:
+      - postgres
+
+networks:
+  ai_network_dev:
+    external: true
+    name: aiservice_ai_network_dev
+

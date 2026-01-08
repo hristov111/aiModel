@@ -1,0 +1,124 @@
+# =============================================================================
+# AI Companion Service - DEVELOPMENT Configuration Template
+# =============================================================================
+# Quick setup for local development
+#
+# SETUP INSTRUCTIONS:
+# 1. Copy this file: cp ENV_DEVELOPMENT_TEMPLATE.txt .env
+# 2. Add your OpenAI API key
+# 3. Start services: make dev
+# 4. Access at: http://localhost:8000
+#
+# =============================================================================
+
+# ============================================
+# Environment
+# ============================================
+ENVIRONMENT=development
+
+# ============================================
+# OpenAI Configuration - REQUIRED
+# ============================================
+OPENAI_API_KEY=sk-your-openai-api-key-here
+OPENAI_MODEL_NAME=gpt-4o-mini
+OPENAI_TEMPERATURE=0.7
+OPENAI_MAX_TOKENS=2000
+
+# ============================================
+# LM Studio (Optional)
+# ============================================
+# Uncomment if you have LM Studio running locally
+# LM_STUDIO_BASE_URL=http://host.docker.internal:1234/v1
+# LM_STUDIO_MODEL_NAME=local-model
+# LM_STUDIO_TEMPERATURE=0.8
+# LM_STUDIO_MAX_TOKENS=2000
+
+# ============================================
+# Database (Auto-configured by Docker)
+# ============================================
+POSTGRES_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/ai_companion_dev
+POSTGRES_POOL_SIZE=10
+POSTGRES_MAX_OVERFLOW=20
+
+# ============================================
+# Redis (Optional for dev)
+# ============================================
+# Enable for testing distributed features
+REDIS_ENABLED=false
+# REDIS_URL=redis://redis:6379/0
+
+# ============================================
+# Authentication (Dev Mode)
+# ============================================
+REQUIRE_AUTHENTICATION=true
+ALLOW_X_USER_ID_AUTH=true  # OK for dev, disable in production
+JWT_SECRET_KEY=dev-secret-key-not-secure
+JWT_ALGORITHM=HS256
+JWT_EXPIRATION_HOURS=24
+
+# ============================================
+# CORS (Allow local development)
+# ============================================
+CORS_ORIGINS=http://localhost:3000,http://localhost:8080,http://localhost:8000
+
+# ============================================
+# Memory & AI Settings (Defaults)
+# ============================================
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+EMBEDDING_DIMENSION=384
+SHORT_TERM_MEMORY_SIZE=10
+LONG_TERM_MEMORY_TOP_K=5
+MEMORY_SIMILARITY_THRESHOLD=0.15
+MEMORY_EXTRACTION_MIN_TURNS=3
+MEMORY_EXTRACTION_METHOD=hybrid
+
+# AI Detection Methods
+EMOTION_DETECTION_METHOD=hybrid
+GOAL_DETECTION_METHOD=hybrid
+PERSONALITY_DETECTION_METHOD=hybrid
+MEMORY_CATEGORIZATION_METHOD=hybrid
+CONTRADICTION_DETECTION_METHOD=hybrid
+
+# Content Routing
+CONTENT_ROUTING_ENABLED=true
+CONTENT_LLM_JUDGE_ENABLED=true
+CONTENT_LLM_JUDGE_THRESHOLD=0.7
+CONTENT_LLM_JUDGE_PROVIDER=openai
+
+# ============================================
+# System Settings
+# ============================================
+RATE_LIMIT_REQUESTS_PER_MINUTE=60
+APP_PORT=8000
+LOG_LEVEL=DEBUG  # Verbose logging for development
+RUN_MIGRATIONS=true
+
+# =============================================================================
+# QUICK START
+# =============================================================================
+# After saving this file as .env:
+#
+# 1. Start all services:
+#    make dev
+#
+# 2. View logs:
+#    make logs
+#
+# 3. Access the app:
+#    http://localhost:8000
+#    http://localhost:8000/docs (API documentation)
+#
+# 4. Test the API:
+#    curl http://localhost:8000/health
+#
+# 5. Create a test user token:
+#    curl -X POST http://localhost:8000/auth/token \
+#      -H "Content-Type: application/json" \
+#      -d '{"user_id":"test-user","expires_in_hours":24}'
+#
+# See API_EXAMPLES.md for more usage examples
+# =============================================================================
+
+
+
+

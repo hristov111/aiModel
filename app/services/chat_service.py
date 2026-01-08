@@ -70,7 +70,8 @@ class ChatService:
         user_message: str,
         conversation_id: UUID = None,
         user_id: str = None,
-        db_session = None
+        db_session = None,
+        system_prompt: Optional[str] = None
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Process chat message and stream response with thinking steps.
@@ -80,6 +81,7 @@ class ChatService:
             conversation_id: Optional conversation ID (creates new if None)
             user_id: External user ID for memory isolation
             db_session: Database session for UUID lookup
+            system_prompt: Optional custom system prompt for persona-based chat
             
         Yields:
             Dictionaries with event type and data:
@@ -500,22 +502,29 @@ class ChatService:
             
             # Step 9: Build complete prompt with GOALS + PERSONALITY + EMOTION AWARENESS + HARD PREFERENCE ENFORCEMENT
             # Use final_personality_config (detected or loaded) for immediate application
-            system_prompt = self.prompt_builder.build_system_prompt(
-                relevant_memories=relevant_memories,
-                conversation_summary=conversation_summary,
-                user_preferences=user_preferences,           # HARD ENFORCEMENT
-                detected_emotion=detected_emotion,            # EMOTION AWARENESS
-                emotion_context=emotion_context,              # EMOTION TRENDS
-                personality_config=final_personality_config,  # PERSONALITY TRAITS (immediate)
-                relationship_state=relationship_state,        # RELATIONSHIP CONTEXT
-                goal_context=goal_context                     # GOALS TRACKING
-            )
+            # If custom system_prompt provided (e.g., from persona selection), use it directly
+            if system_prompt is not None:
+                # Custom persona-based system prompt provided - use it directly
+                logger.info("Using custom persona system prompt")
+                built_system_prompt = system_prompt
+            else:
+                # Build default system prompt with all context
+                built_system_prompt = self.prompt_builder.build_system_prompt(
+                    relevant_memories=relevant_memories,
+                    conversation_summary=conversation_summary,
+                    user_preferences=user_preferences,           # HARD ENFORCEMENT
+                    detected_emotion=detected_emotion,            # EMOTION AWARENESS
+                    emotion_context=emotion_context,              # EMOTION TRENDS
+                    personality_config=final_personality_config,  # PERSONALITY TRAITS (immediate)
+                    relationship_state=relationship_state,        # RELATIONSHIP CONTEXT
+                    goal_context=goal_context                     # GOALS TRACKING
+                )
             
             # Get messages except the current user message (it will be added separately)
             history_messages = [msg for msg in recent_messages if msg.content != user_message]
             
             messages = self.prompt_builder.build_chat_messages(
-                system_prompt=system_prompt,
+                system_prompt=built_system_prompt,
                 recent_messages=history_messages,
                 current_user_message=user_message
             )

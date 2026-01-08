@@ -86,7 +86,8 @@ async def chat_endpoint(
                 user_message=chat_request.message,
                 conversation_id=chat_request.conversation_id,
                 user_id=user_id,
-                db_session=db
+                db_session=db,
+                system_prompt=chat_request.system_prompt  # Pass custom system prompt
             ):
                 # Event is already a dictionary with type, data, etc.
                 # Send as SSE

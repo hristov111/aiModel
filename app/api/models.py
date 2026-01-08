@@ -10,12 +10,14 @@ class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
     message: str = Field(..., min_length=1, max_length=4000, description="User message")
     conversation_id: Optional[UUID] = Field(default=None, description="Conversation ID (creates new if not provided)")
+    system_prompt: Optional[str] = Field(default=None, description="Custom system prompt for persona-based chat")
     
     class Config:
         json_schema_extra = {
             "example": {
                 "message": "Hello, how are you?",
-                "conversation_id": "550e8400-e29b-41d4-a716-446655440000"
+                "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+                "system_prompt": "You are Elara, a thoughtful art enthusiast from Paris..."
             }
         }
 

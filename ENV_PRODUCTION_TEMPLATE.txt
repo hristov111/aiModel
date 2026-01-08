@@ -1,0 +1,156 @@
+# =============================================================================
+# AI Companion Service - PRODUCTION Configuration Template
+# =============================================================================
+# This is a production-ready configuration template
+#
+# SETUP INSTRUCTIONS:
+# 1. Copy this file: cp ENV_PRODUCTION_TEMPLATE.txt .env
+# 2. Fill in your actual values (marked with <CHANGE-ME>)
+# 3. Generate secrets: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+# 4. Review PRODUCTION_OPTIMIZATION_REPORT.md for deployment guide
+# 5. Test with: make prod
+#
+# NEVER commit .env files to version control!
+# =============================================================================
+
+# ============================================
+# Environment - CRITICAL
+# ============================================
+ENVIRONMENT=production
+
+# ============================================
+# OpenAI Configuration - REQUIRED
+# ============================================
+OPENAI_API_KEY=<CHANGE-ME-your-openai-api-key>
+OPENAI_MODEL_NAME=gpt-4o-mini
+OPENAI_TEMPERATURE=0.7
+OPENAI_MAX_TOKENS=2000
+
+# ============================================
+# LM Studio (Optional - for hybrid deployment)
+# ============================================
+# Uncomment if using local LLM for explicit content
+# LM_STUDIO_BASE_URL=http://localhost:1234/v1
+# LM_STUDIO_MODEL_NAME=qwen2.5-7b-instruct
+# LM_STUDIO_TEMPERATURE=0.8
+# LM_STUDIO_MAX_TOKENS=2000
+# VPS_API_KEY=<CHANGE-ME-if-using-remote-llm>
+
+# ============================================
+# Database - CRITICAL
+# ============================================
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=<CHANGE-ME-strong-password-16-chars-min>
+POSTGRES_DB=ai_companion
+POSTGRES_PORT=5432
+POSTGRES_URL=postgresql+asyncpg://postgres:<CHANGE-ME-password>@postgres:5432/ai_companion
+
+# Production pool settings (100-500 users)
+POSTGRES_POOL_SIZE=30
+POSTGRES_MAX_OVERFLOW=50
+
+# ============================================
+# Redis - CRITICAL for Production
+# ============================================
+REDIS_ENABLED=true
+REDIS_PASSWORD=<CHANGE-ME-strong-password-16-chars-min>
+REDIS_PORT=6379
+REDIS_URL=redis://:<CHANGE-ME-password>@redis:6379/0
+
+# ============================================
+# Authentication - CRITICAL
+# ============================================
+REQUIRE_AUTHENTICATION=true
+ALLOW_X_USER_ID_AUTH=false  # MUST be false in production
+JWT_SECRET_KEY=<CHANGE-ME-generate-with-secrets-module-32-chars-min>
+JWT_ALGORITHM=HS256
+JWT_EXPIRATION_HOURS=24
+
+# ============================================
+# CORS - CRITICAL
+# ============================================
+# Replace with your actual domain(s)
+CORS_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
+
+# ============================================
+# Embedding & Memory
+# ============================================
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+EMBEDDING_DIMENSION=384
+SHORT_TERM_MEMORY_SIZE=10
+LONG_TERM_MEMORY_TOP_K=5
+MEMORY_SIMILARITY_THRESHOLD=0.15
+MEMORY_EXTRACTION_MIN_TURNS=3
+MEMORY_EXTRACTION_METHOD=hybrid
+
+# ============================================
+# AI Detection Methods
+# ============================================
+EMOTION_DETECTION_METHOD=hybrid
+GOAL_DETECTION_METHOD=hybrid
+PERSONALITY_DETECTION_METHOD=hybrid
+MEMORY_CATEGORIZATION_METHOD=hybrid
+CONTRADICTION_DETECTION_METHOD=hybrid
+
+# ============================================
+# Content Routing
+# ============================================
+CONTENT_ROUTING_ENABLED=true
+CONTENT_AUDIT_LOG_FILE=content_audit.log
+SESSION_TIMEOUT_HOURS=24
+ROUTE_LOCK_MESSAGE_COUNT=5
+CONTENT_LLM_JUDGE_ENABLED=true
+CONTENT_LLM_JUDGE_THRESHOLD=0.7
+CONTENT_LLM_JUDGE_PROVIDER=openai
+
+# ============================================
+# Memory Consolidation (Optional)
+# ============================================
+# Enable if you want automatic memory deduplication
+MEMORY_CONSOLIDATION_JOB_ENABLED=false
+MEMORY_CONSOLIDATION_JOB_INTERVAL_MINUTES=60
+MEMORY_CONSOLIDATION_JOB_MAX_USERS_PER_RUN=50
+MEMORY_CONSOLIDATION_JOB_MAX_MEMORIES_PER_USER=500
+MEMORY_CONSOLIDATION_JOB_SEMANTIC_THRESHOLD=0.92
+
+# ============================================
+# System Settings
+# ============================================
+SYSTEM_PERSONA=A grounded, emotionally present conversational companion. It speaks plainly and naturally, listens more than it talks, remembers meaningful details from previous conversations, and responds with empathy, honesty, and calm curiosity. It avoids scripted or exaggerated responses and interacts in a way that feels human and unforced.
+RATE_LIMIT_REQUESTS_PER_MINUTE=60
+APP_PORT=8000
+LOG_LEVEL=INFO
+RUN_MIGRATIONS=true
+
+# =============================================================================
+# PRODUCTION DEPLOYMENT STEPS
+# =============================================================================
+# After configuring this file:
+#
+# 1. Start services:
+#    make prod
+#
+# 2. Verify health:
+#    curl http://localhost:8000/health
+#
+# 3. Check metrics:
+#    curl http://localhost:8000/metrics
+#
+# 4. Test authentication:
+#    curl -X POST http://localhost:8000/auth/token \
+#      -H "Content-Type: application/json" \
+#      -d '{"user_id":"test-user","expires_in_hours":24}'
+#
+# 5. Setup HTTPS with nginx/Let's Encrypt
+#
+# 6. Configure monitoring (Grafana + Prometheus)
+#
+# 7. Setup automated backups:
+#    make db-backup  # Add to cron
+#
+# See QUICK_LAUNCH_CHECKLIST.md for complete deployment guide
+# =============================================================================
+
+
+
+
