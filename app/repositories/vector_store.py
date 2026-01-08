@@ -29,13 +29,14 @@ class VectorStoreRepository:
         self.session = session
         self.llm_client = llm_client
     
-    async def ensure_conversation_exists(self, conversation_id: UUID, user_db_id: UUID) -> None:
+    async def ensure_conversation_exists(self, conversation_id: UUID, user_db_id: UUID, personality_id: Optional[UUID] = None) -> None:
         """
         Ensure a conversation record exists.
         
         Args:
             conversation_id: Conversation identifier
             user_db_id: User's database UUID (not external_user_id)
+            personality_id: Optional personality UUID to link conversation to
         """
         try:
             result = await self.session.execute(
@@ -46,11 +47,12 @@ class VectorStoreRepository:
             if conversation is None:
                 conversation = ConversationModel(
                     id=conversation_id,
-                    user_id=user_db_id
+                    user_id=user_db_id,
+                    personality_id=personality_id
                 )
                 self.session.add(conversation)
                 await self.session.flush()
-                logger.debug(f"Created new conversation: {conversation_id} for user: {user_db_id}")
+                logger.debug(f"Created new conversation: {conversation_id} for user: {user_db_id}, personality: {personality_id}")
         except Exception as e:
             logger.error(f"Error ensuring conversation exists: {e}")
             raise MemoryStorageError(f"Failed to create conversation: {e}")
@@ -63,7 +65,8 @@ class VectorStoreRepository:
         memory_type: MemoryType,
         importance: float,
         metadata: Optional[dict] = None,
-        user_db_id: Optional[UUID] = None
+        user_db_id: Optional[UUID] = None,
+        personality_id: Optional[UUID] = None
     ) -> UUID:
         """
         Store a new memory with its embedding.
@@ -76,6 +79,7 @@ class VectorStoreRepository:
             importance: Importance score (0.0 to 1.0)
             metadata: Optional metadata dictionary
             user_db_id: User's database UUID (required for new conversations)
+            personality_id: Optional personality UUID to link memory to
             
         Returns:
             UUID of the created memory
@@ -86,10 +90,10 @@ class VectorStoreRepository:
         try:
             # Ensure conversation exists (only create if user_db_id provided)
             if user_db_id:
-                await self.ensure_conversation_exists(conversation_id, user_db_id)
+                await self.ensure_conversation_exists(conversation_id, user_db_id, personality_id)
             
-            # Get user_id from conversation if not provided
-            if not user_db_id:
+            # Get user_id and personality_id from conversation if not provided
+            if not user_db_id or not personality_id:
                 from app.models.database import ConversationModel
                 from sqlalchemy import select
                 result = await self.session.execute(
@@ -97,7 +101,10 @@ class VectorStoreRepository:
                 )
                 conversation = result.scalar_one_or_none()
                 if conversation:
-                    user_db_id = conversation.user_id
+                    if not user_db_id:
+                        user_db_id = conversation.user_id
+                    if not personality_id:
+                        personality_id = conversation.personality_id
                 else:
                     logger.warning(f"Conversation {conversation_id} not found in database, cannot store memory")
                     raise MemoryStorageError(f"Conversation {conversation_id} not found")
@@ -109,6 +116,7 @@ class VectorStoreRepository:
             memory = MemoryModel(
                 conversation_id=conversation_id,
                 user_id=user_db_id,
+                personality_id=personality_id,
                 content=content,
                 embedding=embedding,
                 memory_type=db_memory_type,
@@ -137,7 +145,8 @@ class VectorStoreRepository:
         query_embedding: List[float],
         top_k: int = 5,
         min_similarity: float = None,
-        user_external_id: Optional[str] = None
+        user_external_id: Optional[str] = None,
+        personality_id: Optional[UUID] = None
     ) -> List[Memory]:
         """
         Search for similar memories using vector similarity.
@@ -148,6 +157,7 @@ class VectorStoreRepository:
             top_k: Number of results to return
             min_similarity: Minimum similarity threshold (0.0 to 1.0), defaults to config value
             user_external_id: Optional user ID for additional security check
+            personality_id: Optional personality UUID to filter memories
             
         Returns:
             List of similar memories with similarity scores
@@ -162,7 +172,7 @@ class VectorStoreRepository:
         try:
             from app.models.database import UserModel
             
-            # Get user_id from conversation to search across all their memories
+            # Get user_id and personality_id from conversation to search across their memories
             from app.models.database import ConversationModel
             result = await self.session.execute(
                 select(ConversationModel).where(ConversationModel.id == conversation_id)
@@ -173,10 +183,14 @@ class VectorStoreRepository:
                 logger.warning(f"Conversation {conversation_id} not found for memory search")
                 return []
             
+            # Use conversation's personality_id if not explicitly provided
+            if not personality_id:
+                personality_id = conversation.personality_id
+            
             # Use pgvector cosine similarity operator (<=>)
             # Note: <=> returns distance, so lower is better (0 = identical)
             # Similarity = 1 - distance
-            # Search across ALL user's memories, not just current conversation
+            # Search across personality's memories (or shared memories)
             # Only return active memories (exclude superseded/consolidated ones)
             query_builder = (
                 select(
@@ -187,6 +201,15 @@ class VectorStoreRepository:
                 .where(MemoryModel.is_active == True)
                 .where((1 - MemoryModel.embedding.cosine_distance(query_embedding)) >= min_similarity)
             )
+            
+            # Filter by personality: either matches personality_id OR is marked as shared
+            if personality_id:
+                query_builder = query_builder.where(
+                    (MemoryModel.personality_id == personality_id) | (MemoryModel.is_shared == True)
+                )
+            else:
+                # If no personality_id, only get shared memories
+                query_builder = query_builder.where(MemoryModel.is_shared == True)
             
             # Add user ownership check if user_external_id provided
             if user_external_id:

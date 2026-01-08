@@ -1,6 +1,6 @@
 """Long-term memory service facade combining retrieval and extraction."""
 
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 import logging
 
@@ -39,7 +39,8 @@ class LongTermMemoryService:
         self,
         conversation_id: UUID,
         query_text: str,
-        top_k: int = None
+        top_k: int = None,
+        personality_id: Optional[UUID] = None
     ) -> List[Memory]:
         """
         Retrieve relevant memories for a query.
@@ -48,6 +49,7 @@ class LongTermMemoryService:
             conversation_id: Conversation identifier
             query_text: Query text
             top_k: Number of memories to retrieve
+            personality_id: Optional personality UUID to filter memories
             
         Returns:
             List of relevant memories
@@ -55,13 +57,15 @@ class LongTermMemoryService:
         return await self.retrieval.retrieve_relevant(
             conversation_id=conversation_id,
             query_text=query_text,
-            top_k=top_k
+            top_k=top_k,
+            personality_id=personality_id
         )
     
     async def extract_and_store_memories(
         self,
         conversation_id: UUID,
-        messages: List[Message]
+        messages: List[Message],
+        personality_id: Optional[UUID] = None
     ) -> int:
         """
         Extract and store memories from messages.
@@ -69,13 +73,15 @@ class LongTermMemoryService:
         Args:
             conversation_id: Conversation identifier
             messages: Recent messages
+            personality_id: Optional personality UUID to link memories to
             
         Returns:
             Number of memories stored
         """
         return await self.extraction.extract_and_store(
             conversation_id=conversation_id,
-            messages=messages
+            messages=messages,
+            personality_id=personality_id
         )
     
     async def clear_memories(self, conversation_id: UUID) -> int:

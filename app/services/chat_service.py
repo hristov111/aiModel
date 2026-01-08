@@ -71,7 +71,8 @@ class ChatService:
         conversation_id: UUID = None,
         user_id: str = None,
         db_session = None,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
+        personality_name: Optional[str] = None
     ) -> AsyncIterator[Dict[str, Any]]:
         """
         Process chat message and stream response with thinking steps.
@@ -82,6 +83,7 @@ class ChatService:
             user_id: External user ID for memory isolation
             db_session: Database session for UUID lookup
             system_prompt: Optional custom system prompt for persona-based chat
+            personality_name: Optional personality name to use for memory isolation
             
         Yields:
             Dictionaries with event type and data:
@@ -102,6 +104,7 @@ class ChatService:
         
         # Try to get or create database UUID for user
         user_db_id = None
+        personality_id = None
         if user_id and db_session:
             try:
                 from app.core.auth import get_or_create_user_db_id
@@ -109,6 +112,17 @@ class ChatService:
                 if user_db_id:
                     logger.info(f"Resolved user {user_id} to database UUID: {user_db_id}")
                     journey.log_user_resolved(str(user_db_id))
+                    
+                    # Get personality_id if personality_name provided
+                    if personality_name and self.personality_service:
+                        try:
+                            personality_id = await self.personality_service.get_personality_id(user_db_id, personality_name)
+                            if personality_id:
+                                logger.info(f"Resolved personality '{personality_name}' to ID: {personality_id}")
+                            else:
+                                logger.warning(f"Personality '{personality_name}' not found for user {user_id}")
+                        except Exception as e:
+                            logger.warning(f"Could not resolve personality ID: {e}")
             except Exception as e:
                 logger.debug(f"Could not resolve/create user DB ID: {e}")
                 journey.log_step("USER_RESOLUTION_FAILED", "Could not resolve/create user DB ID", level="DEBUG")
@@ -126,14 +140,15 @@ class ChatService:
                 existing_conv = result.scalar_one_or_none()
                 
                 if not existing_conv:
-                    # Create new conversation record
+                    # Create new conversation record with personality link
                     conversation = ConversationModel(
                         id=conversation_id,
-                        user_id=user_db_id
+                        user_id=user_db_id,
+                        personality_id=personality_id
                     )
                     db_session.add(conversation)
                     await db_session.commit()
-                    logger.info(f"Created conversation record in database: {conversation_id}")
+                    logger.info(f"Created conversation record in database: {conversation_id} with personality: {personality_id}")
             except Exception as e:
                 logger.warning(f"Could not create conversation in database: {e}")
                 # Continue anyway - conversation will work in-memory
@@ -294,14 +309,16 @@ class ChatService:
                     return None, None
                     
                 try:
-                    personality_config = await self.personality_service.get_personality(user_db_id)
-                    relationship_state = await self.personality_service.get_relationship_state(user_db_id)
+                    personality_config = await self.personality_service.get_personality(user_db_id, personality_name)
+                    relationship_state = await self.personality_service.get_relationship_state(user_db_id, personality_id) if personality_id else None
                     
-                    # Update relationship metrics
-                    await self.personality_service.update_relationship_metrics(
-                        user_id=user_db_id,
-                        message_sent=True
-                    )
+                    # Update relationship metrics for this personality
+                    if personality_id:
+                        await self.personality_service.update_relationship_metrics(
+                            user_id=user_db_id,
+                            personality_id=personality_id,
+                            message_sent=True
+                        )
                     return personality_config, relationship_state
                 except Exception as e:
                     logger.warning(f"Could not load personality: {e}")
@@ -459,7 +476,8 @@ class ChatService:
             journey.log_memory_retrieval_start(user_message)
             relevant_memories = await self.long_term_memory.retrieve_relevant_memories(
                 conversation_id=conversation_id,
-                query_text=user_message
+                query_text=user_message,
+                personality_id=personality_id
             )
             logger.debug(f"Retrieved {len(relevant_memories)} relevant memories")
             journey.log_memory_retrieved(len(relevant_memories), settings.long_term_memory_top_k)
@@ -941,7 +959,8 @@ Note: Explicit content may be limited due to content policy restrictions."""
             
             count = await self.long_term_memory.extract_and_store_memories(
                 conversation_id=conversation_id,
-                messages=recent_messages
+                messages=recent_messages,
+                personality_id=personality_id
             )
             
             if count > 0:

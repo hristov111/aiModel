@@ -1,6 +1,6 @@
 """Memory retrieval service with semantic search and re-ranking."""
 
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 import logging
 
@@ -35,7 +35,8 @@ class MemoryRetrieval:
         self,
         conversation_id: UUID,
         query_text: str,
-        top_k: int = None
+        top_k: int = None,
+        personality_id: Optional[UUID] = None
     ) -> List[Memory]:
         """
         Retrieve relevant memories for a query.
@@ -44,6 +45,7 @@ class MemoryRetrieval:
             conversation_id: Conversation identifier
             query_text: Query text to search for
             top_k: Number of memories to retrieve (default from config)
+            personality_id: Optional personality UUID to filter memories
             
         Returns:
             List of relevant memories, sorted by relevance
@@ -64,12 +66,13 @@ class MemoryRetrieval:
             query_embedding = self.embedding_generator.generate_embedding(enhanced_query)
             logger.info(f"Generated embedding with {len(query_embedding)} dimensions")
             
-            # Search vector store
+            # Search vector store (with personality filtering)
             memories = await self.vector_store.search_similar(
                 conversation_id=conversation_id,
                 query_embedding=query_embedding,
                 top_k=top_k * 2,  # Retrieve more for re-ranking
-                min_similarity=settings.memory_similarity_threshold
+                min_similarity=settings.memory_similarity_threshold,
+                personality_id=personality_id
             )
             
             if not memories:

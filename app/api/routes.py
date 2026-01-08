@@ -17,6 +17,7 @@ from app.api.models import (
     ClearEmotionHistoryResponse, EmotionEntry,
     CreatePersonalityRequest, UpdatePersonalityRequest, PersonalityResponse,
     ListArchetypesResponse, RelationshipStateResponse, ArchetypeInfo,
+    PersonalityListItem, ListPersonalitiesResponse,
     GoalRequest, UpdateGoalRequest, ProgressUpdateRequest, GoalResponse,
     GoalListResponse, ProgressEntryResponse, GoalProgressHistoryResponse,
     GoalAnalyticsResponse, CheckinGoalsResponse, DeleteGoalResponse,
@@ -87,7 +88,8 @@ async def chat_endpoint(
                 conversation_id=chat_request.conversation_id,
                 user_id=user_id,
                 db_session=db,
-                system_prompt=chat_request.system_prompt  # Pass custom system prompt
+                system_prompt=chat_request.system_prompt,  # Pass custom system prompt
+                personality_name=chat_request.personality_name  # Pass personality name for memory isolation
             ):
                 # Event is already a dictionary with type, data, etc.
                 # Send as SSE
@@ -517,24 +519,75 @@ async def get_archetypes():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/personality", response_model=PersonalityResponse)
-async def get_personality(
+@router.get("/personality", response_model=ListPersonalitiesResponse)
+async def list_personalities(
     user_id: str = Depends(get_current_user_id),
-    personality_service: PersonalityService = Depends(get_personality_service)
+    personality_service: PersonalityService = Depends(get_personality_service),
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    Get current AI personality configuration for the authenticated user.
+    List all personalities for the authenticated user.
+    
+    **Returns:**
+    - List of all personalities with basic information
+    """
+    try:
+        from app.core.auth import get_user_db_id
+        user_db_id = await get_user_db_id(db, user_id)
+        
+        if not user_db_id:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        personalities = await personality_service.list_personalities(user_db_id)
+        
+        personality_items = [
+            {
+                "personality_name": p['personality_name'],
+                "archetype": p.get('archetype'),
+                "relationship_type": p.get('relationship_type'),
+                "created_at": p['meta']['created_at']
+            }
+            for p in personalities
+        ]
+        
+        return ListPersonalitiesResponse(
+            personalities=personality_items,
+            total=len(personality_items),
+            message="Personalities retrieved successfully"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing personalities: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/personality/{personality_name}", response_model=PersonalityResponse)
+async def get_personality(
+    personality_name: str,
+    user_id: str = Depends(get_current_user_id),
+    personality_service: PersonalityService = Depends(get_personality_service),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get specific personality configuration by name.
     
     **Returns:**
     - Personality traits, behaviors, and custom configuration
     """
     try:
-        personality = await personality_service.get_personality(UUID(user_id))
+        from app.core.auth import get_user_db_id
+        user_db_id = await get_user_db_id(db, user_id)
+        
+        if not user_db_id:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        personality = await personality_service.get_personality(user_db_id, personality_name)
         
         if not personality:
             raise HTTPException(
                 status_code=404,
-                detail="No personality configured. Use POST /personality to create one."
+                detail=f"Personality '{personality_name}' not found"
             )
         
         return PersonalityResponse(**personality)
@@ -600,6 +653,7 @@ async def create_personality(
         
         personality = await personality_service.create_personality(
             user_id=user_db_id,
+            personality_name=request.personality_name,
             archetype=request.archetype,
             traits=traits_dict,
             behaviors=behaviors_dict,
@@ -614,16 +668,19 @@ async def create_personality(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/personality", response_model=PersonalityResponse)
+@router.put("/personality/{personality_name}", response_model=PersonalityResponse)
 async def update_personality(
+    personality_name: str,
     request: UpdatePersonalityRequest,
     user_id: str = Depends(get_current_user_id),
-    personality_service: PersonalityService = Depends(get_personality_service)
+    personality_service: PersonalityService = Depends(get_personality_service),
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    Update AI personality configuration.
+    Update AI personality configuration for a specific personality.
     
     **Parameters:**
+    - `personality_name`: Name of the personality to update
     - `merge`: If true (default), merge with existing config. If false, replace completely.
     
     **Examples:**
@@ -644,6 +701,12 @@ async def update_personality(
     ```
     """
     try:
+        from app.core.auth import get_user_db_id
+        user_db_id = await get_user_db_id(db, user_id)
+        
+        if not user_db_id:
+            raise HTTPException(status_code=404, detail="User not found")
+        
         traits_dict = request.traits.dict(exclude_none=True) if request.traits else None
         behaviors_dict = request.behaviors.dict(exclude_none=True) if request.behaviors else None
         custom_dict = request.custom.dict(exclude_none=True) if request.custom else None
@@ -653,7 +716,8 @@ async def update_personality(
             custom_dict['relationship_type'] = request.relationship_type
         
         personality = await personality_service.update_personality(
-            user_id=UUID(user_id),
+            user_id=user_db_id,
+            personality_name=personality_name,
             archetype=request.archetype,
             traits=traits_dict,
             behaviors=behaviors_dict,
@@ -662,31 +726,41 @@ async def update_personality(
         )
         
         return PersonalityResponse(**personality, message="Personality updated successfully")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error updating personality: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/personality")
+@router.delete("/personality/{personality_name}")
 async def delete_personality(
+    personality_name: str,
     user_id: str = Depends(get_current_user_id),
-    personality_service: PersonalityService = Depends(get_personality_service)
+    personality_service: PersonalityService = Depends(get_personality_service),
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    Delete AI personality configuration (reset to default).
+    Delete a specific AI personality configuration.
     
     **Returns:**
     - Success status
     """
     try:
-        deleted = await personality_service.delete_personality(UUID(user_id))
+        from app.core.auth import get_user_db_id
+        user_db_id = await get_user_db_id(db, user_id)
+        
+        if not user_db_id:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        deleted = await personality_service.delete_personality(user_db_id, personality_name)
         
         if not deleted:
-            raise HTTPException(status_code=404, detail="No personality to delete")
+            raise HTTPException(status_code=404, detail=f"Personality '{personality_name}' not found")
         
         return {
             "success": True,
-            "message": "Personality deleted successfully (reset to default)"
+            "message": f"Personality '{personality_name}' deleted successfully"
         }
     except HTTPException:
         raise
@@ -695,13 +769,15 @@ async def delete_personality(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/personality/relationship", response_model=RelationshipStateResponse)
+@router.get("/personality/{personality_name}/relationship", response_model=RelationshipStateResponse)
 async def get_relationship_state(
+    personality_name: str,
     user_id: str = Depends(get_current_user_id),
-    personality_service: PersonalityService = Depends(get_personality_service)
+    personality_service: PersonalityService = Depends(get_personality_service),
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    Get relationship state metrics.
+    Get relationship state metrics for a specific personality.
     
     **Returns:**
     - Total messages, relationship depth score, trust level
@@ -709,8 +785,21 @@ async def get_relationship_state(
     - Positive/negative reaction counts
     """
     try:
-        state = await personality_service.get_relationship_state(UUID(user_id))
+        from app.core.auth import get_user_db_id
+        user_db_id = await get_user_db_id(db, user_id)
+        
+        if not user_db_id:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        personality_id = await personality_service.get_personality_id(user_db_id, personality_name)
+        
+        if not personality_id:
+            raise HTTPException(status_code=404, detail=f"Personality '{personality_name}' not found")
+        
+        state = await personality_service.get_relationship_state(user_db_id, personality_id)
         return RelationshipStateResponse(**state)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting relationship state: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

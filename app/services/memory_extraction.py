@@ -46,7 +46,8 @@ class MemoryExtractor:
     async def extract_and_store(
         self,
         conversation_id: UUID,
-        messages: List[Message]
+        messages: List[Message],
+        personality_id: Optional[UUID] = None
     ) -> int:
         """
         Extract memories from conversation messages and store them.
@@ -56,6 +57,7 @@ class MemoryExtractor:
         Args:
             conversation_id: Conversation identifier
             messages: List of recent messages
+            personality_id: Optional personality UUID to link memories to
             
         Returns:
             Number of memories extracted and stored
@@ -115,7 +117,8 @@ class MemoryExtractor:
                         conversation_id=conversation_id,
                         query_embedding=embedding,
                         top_k=1,
-                        min_similarity=0.95  # Very high threshold for duplicates
+                        min_similarity=0.95,  # Very high threshold for duplicates
+                        personality_id=personality_id
                     )
                     
                     # If very similar memory exists, skip storing
@@ -135,7 +138,8 @@ class MemoryExtractor:
                         embedding=embedding,
                         memory_type=fact['type'],
                         importance=fact['importance'],
-                        metadata=fact.get('metadata', {})
+                        metadata=fact.get('metadata', {}),
+                        personality_id=personality_id
                     )
                     stored_count += 1
                     logger.debug(

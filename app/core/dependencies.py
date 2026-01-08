@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.auth import get_current_user_id, ensure_user_exists
+from app.core.config import settings
 from app.repositories.vector_store import VectorStoreRepository
 from app.utils.embeddings import get_embedding_generator, EmbeddingGenerator
 from app.services.llm_client import get_llm_client, LLMClient
@@ -16,10 +17,13 @@ from app.services.chat_service import ChatService
 from app.services.user_preference_service import UserPreferenceService
 from app.services.emotion_service import EmotionService
 from app.services.personality_service import PersonalityService
+from app.services.personality_cache import PersonalityCache
 from app.models.database import UserModel
 
 
 # Singletons
+_personality_cache: Optional[PersonalityCache] = None
+
 def get_embedding_generator_dep() -> EmbeddingGenerator:
     """Get embedding generator dependency."""
     return get_embedding_generator()
@@ -38,6 +42,14 @@ def get_conversation_buffer_dep() -> ConversationBuffer:
 def get_prompt_builder_dep() -> PromptBuilder:
     """Get prompt builder dependency."""
     return PromptBuilder()
+
+
+def get_personality_cache_dep() -> Optional[PersonalityCache]:
+    """Get personality cache dependency (Redis-based singleton)."""
+    global _personality_cache
+    if _personality_cache is None and settings.redis_enabled and settings.redis_url:
+        _personality_cache = PersonalityCache(redis_url=settings.redis_url)
+    return _personality_cache
 
 
 # Database-dependent services
@@ -80,10 +92,11 @@ def get_emotion_service(
 
 def get_personality_service(
     db: AsyncSession = Depends(get_db),
-    llm_client: LLMClient = Depends(get_llm_client_dep)
+    llm_client: LLMClient = Depends(get_llm_client_dep),
+    cache: Optional[PersonalityCache] = Depends(get_personality_cache_dep)
 ) -> PersonalityService:
-    """Get personality service dependency."""
-    return PersonalityService(db, llm_client=llm_client)
+    """Get personality service dependency with Redis caching."""
+    return PersonalityService(db, llm_client=llm_client, cache=cache)
 
 
 def get_goal_service(

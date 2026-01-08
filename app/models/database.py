@@ -62,6 +62,7 @@ class ConversationModel(Base):
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    personality_id = Column(UUID(as_uuid=True), ForeignKey("personality_profiles.id", ondelete="CASCADE"), nullable=True, index=True)  # Link to personality
     title = Column(String(255), nullable=True)  # Optional conversation title
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
@@ -69,11 +70,14 @@ class ConversationModel(Base):
     
     # Relationships
     user = relationship("UserModel", back_populates="conversations")
+    personality = relationship("PersonalityProfileModel", back_populates="conversations")
     memories = relationship("MemoryModel", back_populates="conversation", cascade="all, delete-orphan")
     messages = relationship("MessageModel", back_populates="conversation", cascade="all, delete-orphan")
     
     __table_args__ = (
         Index("ix_conversations_user_id", "user_id"),
+        Index("ix_conversations_personality_id", "personality_id"),
+        Index("ix_conversations_user_personality", "user_id", "personality_id"),
         Index("ix_conversations_updated_at", "updated_at"),
     )
 
@@ -85,6 +89,7 @@ class MemoryModel(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    personality_id = Column(UUID(as_uuid=True), ForeignKey("personality_profiles.id", ondelete="CASCADE"), nullable=True, index=True)  # Link to personality
     content = Column(Text, nullable=False)
     embedding = Column(Vector(384), nullable=False)  # 384-dimensional vector for all-MiniLM-L6-v2
     # Use PostgreSQL ENUM type (must match database enum type name 'memorytypeenum')
@@ -114,20 +119,27 @@ class MemoryModel(Base):
     # Entity Extraction
     related_entities = Column(JSONB, nullable=True)  # {people: ['Alice', 'Bob'], places: ['Paris'], topics: ['python', 'ai']}
     
+    # Personality Isolation
+    is_shared = Column(Boolean, nullable=False, default=False)  # If True, visible across all user's personalities
+    
     # Original metadata
     extra_metadata = Column(JSONB, nullable=True, default=dict)
     
     # Relationships
     conversation = relationship("ConversationModel", back_populates="memories")
+    personality = relationship("PersonalityProfileModel", back_populates="memories")
     
     # Indexes for performance
     __table_args__ = (
         Index("ix_memories_conversation_id", "conversation_id"),
         Index("ix_memories_user_id", "user_id"),
+        Index("ix_memories_personality_id", "personality_id"),
+        Index("ix_memories_user_personality", "user_id", "personality_id"),  # Fast queries by user+personality
         Index("ix_memories_created_at", "created_at"),
         Index("ix_memories_importance", "importance"),
         Index("ix_memories_category", "category"),
         Index("ix_memories_is_active", "is_active"),
+        Index("ix_memories_is_shared", "is_shared"),
         Index("ix_memories_last_accessed", "last_accessed"),
         # Vector similarity index (cosine distance)
         Index(
@@ -187,7 +199,8 @@ class PersonalityProfileModel(Base):
     __tablename__ = "personality_profiles"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    personality_name = Column(String(100), nullable=False)  # e.g., "elara", "seraphina" - unique per user
     
     # Core Identity
     archetype = Column(String(50), nullable=True)  # wise_mentor, supportive_friend, professional_coach, creative_partner, etc.
@@ -220,18 +233,24 @@ class PersonalityProfileModel(Base):
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
     version = Column(Integer, nullable=False, default=1)  # Track personality evolution
     
+    # Relationships
+    conversations = relationship("ConversationModel", back_populates="personality", cascade="all, delete-orphan")
+    memories = relationship("MemoryModel", back_populates="personality")
+    
     # Indexes
     __table_args__ = (
         Index("ix_personality_profiles_user_id", "user_id"),
+        Index("ix_personality_profiles_user_personality", "user_id", "personality_name", unique=True),  # Unique constraint per user
     )
 
 
 class RelationshipStateModel(Base):
-    """Tracks the evolving relationship between user and AI."""
+    """Tracks the evolving relationship between user and AI personality."""
     __tablename__ = "relationship_state"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    personality_id = Column(UUID(as_uuid=True), ForeignKey("personality_profiles.id", ondelete="CASCADE"), nullable=True, index=True)
     
     # Relationship Metrics
     total_messages = Column(Integer, nullable=False, default=0)
@@ -256,6 +275,8 @@ class RelationshipStateModel(Base):
     # Indexes
     __table_args__ = (
         Index("ix_relationship_state_user_id", "user_id"),
+        Index("ix_relationship_state_personality_id", "personality_id"),
+        Index("ix_relationship_state_user_personality", "user_id", "personality_id", unique=True),  # One relationship per user-personality pair
     )
 
 

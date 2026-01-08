@@ -11,6 +11,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000, description="User message")
     conversation_id: Optional[UUID] = Field(default=None, description="Conversation ID (creates new if not provided)")
     system_prompt: Optional[str] = Field(default=None, description="Custom system prompt for persona-based chat")
+    personality_name: Optional[str] = Field(default=None, max_length=100, description="Lowercase name of the personality/persona")
     
     class Config:
         json_schema_extra = {
@@ -495,6 +496,23 @@ class PersonalityResponse(BaseModel):
                 "message": "Personality retrieved successfully"
             }
         }
+
+
+class PersonalityListItem(BaseModel):
+    """Item in personality list."""
+    id: str = Field(..., description="Personality ID")
+    personality_name: str = Field(..., description="Personality name")
+    archetype: Optional[str] = Field(None, description="Personality archetype")
+    relationship_type: Optional[str] = Field(None, description="Relationship type")
+    description: Optional[str] = Field(None, description="Personality description")
+    example_greeting: Optional[str] = Field(None, description="Example greeting")
+
+
+class ListPersonalitiesResponse(BaseModel):
+    """Response with list of personalities."""
+    personalities: List[PersonalityListItem] = Field(..., description="List of personalities")
+    count: int = Field(..., description="Total number of personalities")
+    message: str = Field(default="Personalities retrieved successfully")
 
 
 class ArchetypeInfo(BaseModel):

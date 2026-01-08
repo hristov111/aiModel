@@ -1,7 +1,7 @@
 """Service for managing AI personality and relationship state."""
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -17,41 +17,164 @@ logger = logging.getLogger(__name__)
 class PersonalityService:
     """Manages AI personality configuration and relationship evolution."""
     
-    def __init__(self, db_session: AsyncSession, llm_client=None):
+    def __init__(self, db_session: AsyncSession, llm_client=None, cache=None):
         """
         Initialize personality service.
         
         Args:
             db_session: Database session
             llm_client: Optional LLM client for AI-based personality detection
+            cache: Optional PersonalityCache for Redis caching
         """
         self.db = db_session
         self.llm_client = llm_client
+        self.cache = cache
+        if cache:
+            logger.info("✅ PersonalityService initialized WITH Redis cache")
+        else:
+            logger.info("⚠️ PersonalityService initialized WITHOUT cache")
     
-    async def get_personality(self, user_id: UUID) -> Optional[Dict[str, Any]]:
+    async def get_personality(self, user_id: UUID, personality_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
-        Get user's AI personality configuration.
+        Get AI personality configuration by name.
+        First checks for user-specific personality, then falls back to global personalities.
+        Uses Redis cache for global personalities (5-10x faster).
+        
+        Args:
+            user_id: User ID
+            personality_name: Optional personality name (if None, returns first personality found)
+            
+        Returns:
+            Personality config dict or None
+        """
+        # First, try to find user-specific personality
+        stmt = select(PersonalityProfileModel).where(
+            PersonalityProfileModel.user_id == user_id
+        )
+        
+        if personality_name:
+            stmt = stmt.where(PersonalityProfileModel.personality_name == personality_name)
+        
+        result = await self.db.execute(stmt)
+        personality = result.scalar_one_or_none()
+        
+        if personality:
+            return self._personality_to_dict(personality)
+        
+        # If not found and personality_name was specified, look for global personality
+        if personality_name:
+            # Try cache first
+            if self.cache:
+                cached_config = await self.cache.get_personality_config(personality_name)
+                if cached_config:
+                    logger.debug(f"✅ Config cache hit for '{personality_name}'")
+                    return cached_config
+            
+            # Not in cache, query database
+            system_user_stmt = select(UserModel.id).where(
+                UserModel.external_user_id == 'system'
+            )
+            system_user_result = await self.db.execute(system_user_stmt)
+            system_user_id = system_user_result.scalar_one_or_none()
+            
+            if system_user_id:
+                global_stmt = select(PersonalityProfileModel).where(
+                    PersonalityProfileModel.user_id == system_user_id,
+                    PersonalityProfileModel.personality_name == personality_name
+                )
+                global_result = await self.db.execute(global_stmt)
+                global_personality = global_result.scalar_one_or_none()
+                
+                if global_personality:
+                    config = self._personality_to_dict(global_personality)
+                    
+                    # Cache for next time
+                    if self.cache and config:
+                        await self.cache.set_personality_config(personality_name, config)
+                        logger.debug(f"💾 Cached config for '{personality_name}'")
+                    
+                    return config
+        
+        return None
+    
+    async def list_personalities(self, user_id: UUID) -> List[Dict[str, Any]]:
+        """
+        List all personalities for a user.
         
         Args:
             user_id: User ID
             
         Returns:
-            Personality config dict or None
+            List of personality dicts
         """
         stmt = select(PersonalityProfileModel).where(
             PersonalityProfileModel.user_id == user_id
+        ).order_by(PersonalityProfileModel.created_at)
+        
+        result = await self.db.execute(stmt)
+        personalities = result.scalars().all()
+        
+        return [self._personality_to_dict(p) for p in personalities]
+    
+    async def get_personality_id(self, user_id: UUID, personality_name: str) -> Optional[UUID]:
+        """
+        Get personality ID by personality name.
+        First checks for user-specific personality, then falls back to global personalities.
+        Uses Redis cache for global personalities (5-10x faster).
+        
+        Args:
+            user_id: User ID (for user-specific personalities)
+            personality_name: Personality name
+            
+        Returns:
+            Personality UUID or None
+        """
+        # First, try to find user-specific personality (not cached)
+        stmt = select(PersonalityProfileModel.id).where(
+            PersonalityProfileModel.user_id == user_id,
+            PersonalityProfileModel.personality_name == personality_name
         )
         result = await self.db.execute(stmt)
-        personality = result.scalar_one_or_none()
+        personality_id = result.scalar_one_or_none()
         
-        if not personality:
-            return None
+        if personality_id:
+            return personality_id
         
-        return self._personality_to_dict(personality)
+        # Try cache for global personality
+        if self.cache:
+            cached_id = await self.cache.get_personality_id(personality_name)
+            if cached_id:
+                logger.debug(f"✅ Cache hit for personality '{personality_name}'")
+                return UUID(cached_id)
+        
+        # If not found, look for global personality (owned by system user)
+        system_user_stmt = select(UserModel.id).where(
+            UserModel.external_user_id == 'system'
+        )
+        system_user_result = await self.db.execute(system_user_stmt)
+        system_user_id = system_user_result.scalar_one_or_none()
+        
+        if system_user_id:
+            global_stmt = select(PersonalityProfileModel.id).where(
+                PersonalityProfileModel.user_id == system_user_id,
+                PersonalityProfileModel.personality_name == personality_name
+            )
+            global_result = await self.db.execute(global_stmt)
+            global_personality_id = global_result.scalar_one_or_none()
+            
+            # Cache the result for next time
+            if global_personality_id and self.cache:
+                await self.cache.set_personality_id(personality_name, str(global_personality_id))
+                logger.debug(f"💾 Cached personality '{personality_name}' -> {global_personality_id}")
+            
+            return global_personality_id
+        
+        return None
     
     async def create_personality(
         self,
         user_id: UUID,
+        personality_name: str,
         archetype: Optional[str] = None,
         traits: Optional[Dict[str, int]] = None,
         behaviors: Optional[Dict[str, bool]] = None,
@@ -62,6 +185,7 @@ class PersonalityService:
         
         Args:
             user_id: User ID
+            personality_name: Unique name for this personality
             archetype: Archetype name (e.g., 'wise_mentor')
             traits: Custom trait values (0-10)
             behaviors: Custom behavior flags
@@ -70,10 +194,10 @@ class PersonalityService:
         Returns:
             Created personality dict
         """
-        # Check if personality already exists
-        existing = await self.get_personality(user_id)
+        # Check if personality with this name already exists for user
+        existing = await self.get_personality(user_id, personality_name)
         if existing:
-            raise ValueError("Personality profile already exists. Use update instead.")
+            raise ValueError(f"Personality '{personality_name}' already exists for this user.")
         
         # Start with archetype config if provided
         config = {}
@@ -90,6 +214,7 @@ class PersonalityService:
         # Create personality profile
         personality = PersonalityProfileModel(
             user_id=user_id,
+            personality_name=personality_name.lower().strip(),
             archetype=archetype,
             relationship_type=config.get('relationship_type', 'assistant'),
             
@@ -120,13 +245,17 @@ class PersonalityService:
         await self.db.commit()
         await self.db.refresh(personality)
         
-        logger.info(f"Created personality for user {user_id}: archetype={archetype}")
+        # Create initial relationship state for this personality
+        await self._create_relationship_state(user_id, personality.id)
+        
+        logger.info(f"Created personality '{personality_name}' for user {user_id}: archetype={archetype}")
         
         return self._personality_to_dict(personality)
     
     async def update_personality(
         self,
         user_id: UUID,
+        personality_name: str,
         archetype: Optional[str] = None,
         traits: Optional[Dict[str, int]] = None,
         behaviors: Optional[Dict[str, bool]] = None,
@@ -138,6 +267,7 @@ class PersonalityService:
         
         Args:
             user_id: User ID
+            personality_name: Name of personality to update
             archetype: New archetype (if changing completely)
             traits: Trait updates
             behaviors: Behavior updates
@@ -149,20 +279,14 @@ class PersonalityService:
         """
         # Get existing personality
         stmt = select(PersonalityProfileModel).where(
-            PersonalityProfileModel.user_id == user_id
+            PersonalityProfileModel.user_id == user_id,
+            PersonalityProfileModel.personality_name == personality_name
         )
         result = await self.db.execute(stmt)
         personality = result.scalar_one_or_none()
         
         if not personality:
-            # Create if doesn't exist
-            return await self.create_personality(
-                user_id=user_id,
-                archetype=archetype,
-                traits=traits,
-                behaviors=behaviors,
-                custom_config=custom_config
-            )
+            raise ValueError(f"Personality '{personality_name}' not found for this user")
         
         # If changing archetype completely
         if archetype and not merge:
@@ -211,22 +335,24 @@ class PersonalityService:
         await self.db.commit()
         await self.db.refresh(personality)
         
-        logger.info(f"Updated personality for user {user_id} (version {personality.version})")
+        logger.info(f"Updated personality '{personality_name}' for user {user_id} (version {personality.version})")
         
         return self._personality_to_dict(personality)
     
-    async def delete_personality(self, user_id: UUID) -> bool:
+    async def delete_personality(self, user_id: UUID, personality_name: str) -> bool:
         """
-        Delete personality profile (reset to default).
+        Delete personality profile.
         
         Args:
             user_id: User ID
+            personality_name: Name of personality to delete
             
         Returns:
             True if deleted, False if didn't exist
         """
         stmt = select(PersonalityProfileModel).where(
-            PersonalityProfileModel.user_id == user_id
+            PersonalityProfileModel.user_id == user_id,
+            PersonalityProfileModel.personality_name == personality_name
         )
         result = await self.db.execute(stmt)
         personality = result.scalar_one_or_none()
@@ -237,18 +363,19 @@ class PersonalityService:
         await self.db.delete(personality)
         await self.db.commit()
         
-        logger.info(f"Deleted personality for user {user_id}")
+        logger.info(f"Deleted personality '{personality_name}' for user {user_id}")
         
         return True
     
     # ========== Relationship State Management ==========
     
-    async def get_relationship_state(self, user_id: UUID) -> Dict[str, Any]:
+    async def get_relationship_state(self, user_id: UUID, personality_id: Optional[UUID] = None) -> Dict[str, Any]:
         """
-        Get relationship state metrics.
+        Get relationship state metrics for a specific personality.
         
         Args:
             user_id: User ID
+            personality_id: Personality ID (if None, gets first relationship state found)
             
         Returns:
             Relationship state dict
@@ -256,12 +383,16 @@ class PersonalityService:
         stmt = select(RelationshipStateModel).where(
             RelationshipStateModel.user_id == user_id
         )
+        
+        if personality_id:
+            stmt = stmt.where(RelationshipStateModel.personality_id == personality_id)
+        
         result = await self.db.execute(stmt)
         state = result.scalar_one_or_none()
         
-        if not state:
-            # Create initial state
-            state = await self._create_relationship_state(user_id)
+        if not state and personality_id:
+            # Create initial state for this personality
+            state = await self._create_relationship_state(user_id, personality_id)
         
         # Update days_known
         days_known = (datetime.utcnow() - state.first_interaction).days
@@ -284,27 +415,30 @@ class PersonalityService:
     async def update_relationship_metrics(
         self,
         user_id: UUID,
+        personality_id: UUID,
         message_sent: bool = False,
         positive_reaction: bool = False,
         negative_reaction: bool = False
     ) -> None:
         """
-        Update relationship metrics after interaction.
+        Update relationship metrics after interaction with a specific personality.
         
         Args:
             user_id: User ID
+            personality_id: Personality ID
             message_sent: Whether user sent a message
             positive_reaction: Whether user gave positive feedback
             negative_reaction: Whether user gave negative feedback
         """
         stmt = select(RelationshipStateModel).where(
-            RelationshipStateModel.user_id == user_id
+            RelationshipStateModel.user_id == user_id,
+            RelationshipStateModel.personality_id == personality_id
         )
         result = await self.db.execute(stmt)
         state = result.scalar_one_or_none()
         
         if not state:
-            state = await self._create_relationship_state(user_id)
+            state = await self._create_relationship_state(user_id, personality_id)
         
         # Update counts
         if message_sent:
@@ -337,10 +471,11 @@ class PersonalityService:
         
         await self.db.commit()
     
-    async def _create_relationship_state(self, user_id: UUID) -> RelationshipStateModel:
-        """Create initial relationship state."""
+    async def _create_relationship_state(self, user_id: UUID, personality_id: UUID) -> RelationshipStateModel:
+        """Create initial relationship state for a personality."""
         state = RelationshipStateModel(
             user_id=user_id,
+            personality_id=personality_id,
             total_messages=0,
             relationship_depth_score=0.0,
             trust_level=5.0,
@@ -398,6 +533,8 @@ class PersonalityService:
     def _personality_to_dict(self, personality: PersonalityProfileModel) -> Dict[str, Any]:
         """Convert personality model to dict."""
         return {
+            'id': str(personality.id),
+            'personality_name': personality.personality_name,
             'archetype': personality.archetype,
             'relationship_type': personality.relationship_type,
             'traits': {
