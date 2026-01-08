@@ -502,11 +502,23 @@ class ChatService:
             
             # Step 9: Build complete prompt with GOALS + PERSONALITY + EMOTION AWARENESS + HARD PREFERENCE ENFORCEMENT
             # Use final_personality_config (detected or loaded) for immediate application
-            # If custom system_prompt provided (e.g., from persona selection), use it directly
+            # ALWAYS build the full prompt with memories, preferences, emotions, goals
+            # If custom system_prompt provided (e.g., from persona selection), use it as BASE but ADD memories
             if system_prompt is not None:
-                # Custom persona-based system prompt provided - use it directly
-                logger.info("Using custom persona system prompt")
-                built_system_prompt = system_prompt
+                # Custom persona-based system prompt provided - use as base persona
+                logger.info("Using custom persona system prompt WITH memory injection")
+                # Build full context prompt with custom persona as base
+                temp_builder = PromptBuilder(persona=system_prompt)
+                built_system_prompt = temp_builder.build_system_prompt(
+                    relevant_memories=relevant_memories,
+                    conversation_summary=conversation_summary,
+                    user_preferences=user_preferences,           # HARD ENFORCEMENT
+                    detected_emotion=detected_emotion,            # EMOTION AWARENESS
+                    emotion_context=emotion_context,              # EMOTION TRENDS
+                    personality_config=final_personality_config,  # PERSONALITY TRAITS (immediate)
+                    relationship_state=relationship_state,        # RELATIONSHIP CONTEXT
+                    goal_context=goal_context                     # GOALS TRACKING
+                )
             else:
                 # Build default system prompt with all context
                 built_system_prompt = self.prompt_builder.build_system_prompt(
@@ -522,6 +534,11 @@ class ChatService:
             
             # Get messages except the current user message (it will be added separately)
             history_messages = [msg for msg in recent_messages if msg.content != user_message]
+            
+            # DEBUG: Log the system prompt to verify memory injection
+            logger.debug(f"System prompt preview: {built_system_prompt[:500]}...")
+            if relevant_memories:
+                logger.info(f"✅ Injected {len(relevant_memories)} memories into system prompt")
             
             messages = self.prompt_builder.build_chat_messages(
                 system_prompt=built_system_prompt,
